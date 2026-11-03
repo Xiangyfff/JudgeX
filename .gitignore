@@ -1,0 +1,11 @@
+# build output
+backend/target/
+frontend/dist/
+backend/src/main/resources/static/
+
+# runtime data (H2 database, sandbox work dirs)
+backend/data/
+
+# local tooling
+tmp/
+node_modules/

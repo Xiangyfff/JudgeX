@@ -1,0 +1,88 @@
+server:
+  port: ${JUDGEX_PORT:18900}
+  address: 127.0.0.1
+  compression:
+    enabled: true
+
+spring:
+  application:
+    name: judgex
+  datasource:
+    url: jdbc:h2:file:./data/judgex;MODE=MySQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1
+    driver-class-name: org.h2.Driver
+    username: judgex
+    password: judgex
+    hikari:
+      maximum-pool-size: 24
+      pool-name: judgex-pool
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:schema.sql
+      continue-on-error: false
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+    time-zone: Asia/Shanghai
+  mvc:
+    async:
+      request-timeout: 120000
+  task:
+    scheduling:
+      pool:
+        # Relay, lease renewal and heartbeat must not starve each other.
+        size: 6
+  data:
+    redis:
+      host: ${JUDGEX_REDIS_HOST:127.0.0.1}
+      port: ${JUDGEX_REDIS_PORT:6379}
+      timeout: 800ms
+      connect-timeout: 800ms
+      lettuce:
+        pool:
+          max-active: 8
+          max-idle: 8
+
+judgex:
+  # HS256 secret. Replace in production.
+  jwt-secret: ${JUDGEX_JWT_SECRET:judgex-dev-secret-please-change-in-production-0123456789}
+  token-ttl-hours: 12
+  # How many judge threads this node runs. Each thread = one worker slot.
+  worker:
+    id: ${JUDGEX_WORKER_ID:node-1}
+    concurrency: ${JUDGEX_WORKER_CONCURRENCY:4}
+    enabled: ${JUDGEX_WORKER_ENABLED:true}
+    heartbeat-interval-ms: 3000
+    lease-seconds: 45
+    poll-interval-ms: 250
+  sandbox:
+    # local | docker | auto
+    mode: ${JUDGEX_SANDBOX:local}
+    max-output-bytes: 65536
+    work-dir: ${JUDGEX_WORK_DIR:./data/work}
+    docker-image: judgex-runner:latest
+  limits:
+    max-source-bytes: 65536
+    max-active-per-user: 1
+    submit-rate-per-minute: 20
+  redis:
+    # Redis only ever holds state we can rebuild (counters, presence, ranking).
+    # Tasks and verdicts stay in the database, so a Redis outage degrades instead of corrupting.
+    enabled: ${JUDGEX_REDIS_ENABLED:true}
+    key-prefix: "jx:"
+  mq:
+    # Transactional outbox: the verdict and the outbox row are committed in one transaction,
+    # then a relay delivers the row to RocketMQ. Broker down => rows simply wait in the table.
+    enabled: ${JUDGEX_MQ_ENABLED:true}
+    namesrv: ${JUDGEX_MQ_NAMESRV:127.0.0.1:19877}
+    topic: ${JUDGEX_MQ_TOPIC:judgex-result}
+    producer-group: judgex-producer
+    consumer-group: judgex-notify
+    max-attempts: 6
+
+logging:
+  level:
+    root: INFO
+    com.judgex: DEBUG
+  pattern:
+    console: "%d{HH:mm:ss.SSS} %-5level [%X{traceId:-}] %logger{20} - %msg%n"
