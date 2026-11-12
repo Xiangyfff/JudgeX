@@ -44,9 +44,16 @@ public class JudgeLeaseConsumer {
         this.mapper = mapper;
     }
 
+    /**
+     * Start on a background thread: the broker handshake can take seconds on a cold JVM,
+     * and blocking the ready event would keep the dispatcher (started by another listener)
+     * from running until it finishes.
+     */
     @EventListener(ApplicationReadyEvent.class)
     public void onReady() {
-        start();
+        Thread t = new Thread(this::start, "mq-consumer-start");
+        t.setDaemon(true);
+        t.start();
     }
 
     @Scheduled(fixedDelay = 15_000)

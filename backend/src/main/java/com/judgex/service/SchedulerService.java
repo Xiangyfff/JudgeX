@@ -24,6 +24,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Pull-based scheduler living inside the app JVM.
@@ -63,6 +64,7 @@ public class SchedulerService {
     private final Semaphore slots;
     /** Released by the dispatch consumer; one permit is enough to mean "go look". */
     private final Semaphore wake = new Semaphore(0);
+    private final AtomicLong lastWakeNanos = new AtomicLong();
     private final AtomicInteger active = new AtomicInteger();
     private final ExecutorService pool;
     private final String workerId;
@@ -111,6 +113,7 @@ public class SchedulerService {
      * is kept: ten messages arriving together must not cause ten consecutive scans.
      */
     public void wakeUp() {
+        lastWakeNanos.set(System.nanoTime());
         if (wake.availablePermits() == 0) {
             wake.release();
         }
@@ -144,6 +147,11 @@ public class SchedulerService {
                 for (Long taskId : candidates) {
                     if (tasks.tryClaim(taskId, workerId, props.worker().leaseSeconds())) {
                         TaskMapper.ClaimedTask task = tasks.claimed(taskId);
+                        long wokeAt = lastWakeNanos.get();
+                        if (wokeAt > 0) {
+                            log.debug("claimed task {} {} ms after wake", task.id(),
+                                    Math.max(0, (System.nanoTime() - wokeAt) / 1_000_000));
+                        }
                         active.incrementAndGet();
                         claimed = true;
                         // Arm the alarm before the work starts: if this JVM dies now, the

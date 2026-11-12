@@ -26,10 +26,13 @@ public class MqProducer {
 
     private final JudgexProps props;
     private volatile DefaultMQProducer producer;
-    private volatile String state = "DISABLED";
+    /** IDLE = enabled but not started yet; the first send or the warm-up thread starts it. */
+    private volatile String state = "IDLE";
     private volatile String lastError;
     /** A failed start blocks for seconds; do not retry on every relay tick. */
     private volatile long nextAttemptAt;
+    /** True while a start attempt is in flight, so callers fail fast instead of waiting. */
+    private volatile boolean starting;
 
     public MqProducer(JudgexProps props) {
         this.props = props;
@@ -46,41 +49,84 @@ public class MqProducer {
         t.start();
     }
 
-    public synchronized DefaultMQProducer get() {
+    public DefaultMQProducer get() {
         if (!props.mq().enabled()) {
             state = "DISABLED";
             return null;
         }
-        if (producer != null) {
-            return producer;
+        DefaultMQProducer ready = producer;
+        if (ready != null) {
+            return ready;
         }
-        if (System.currentTimeMillis() < nextAttemptAt) {
+        // Starting a producer takes seconds; never park a request thread (or the dispatch
+        // worker) behind it. A dropped ping is covered by the fallback poll.
+        if (starting) {
             return null;
         }
-        nextAttemptAt = System.currentTimeMillis() + 15_000L;
-        try {
-            DefaultMQProducer p = new DefaultMQProducer(props.mq().producerGroup());
-            p.setNamesrvAddr(props.mq().namesrv());
-            p.setSendMsgTimeout(3000);
-            p.setRetryTimesWhenSendFailed(1);
-            p.start();
-            producer = p;
-            state = "UP";
-            lastError = null;
-            log.info("rocketmq producer up, namesrv={}, group={}", props.mq().namesrv(), props.mq().producerGroup());
-        } catch (Exception e) {
-            state = "DOWN";
-            lastError = rootMessage(e);
-            log.warn("rocketmq producer unavailable: {}", e.toString());
+        synchronized (this) {
+            if (producer != null) {
+                return producer;
+            }
+            if (starting || System.currentTimeMillis() < nextAttemptAt) {
+                return null;
+            }
+            starting = true;
+            nextAttemptAt = System.currentTimeMillis() + 15_000L;
+            try {
+                DefaultMQProducer p = new DefaultMQProducer(props.mq().producerGroup());
+                p.setNamesrvAddr(props.mq().namesrv());
+                p.setSendMsgTimeout(3000);
+                p.setRetryTimesWhenSendFailed(1);
+                p.start();
+                producer = p;
+                state = "UP";
+                lastError = null;
+                log.info("rocketmq producer up, namesrv={}, group={}", props.mq().namesrv(), props.mq().producerGroup());
+                warmRoutes(p);
+            } catch (Exception e) {
+                state = "DOWN";
+                lastError = rootMessage(e);
+                log.warn("rocketmq producer unavailable: {}", e.toString());
+            } finally {
+                starting = false;
+            }
+            return producer;
         }
-        return producer;
+    }
+
+    /**
+     * Fetch topic routes up front. The first send otherwise pays a name-server round trip
+     * plus a broker handshake — measured at ~150 ms on this machine — which is exactly the
+     * cold-start hiccup that makes "millisecond wake-up" look untrue for the first
+     * submission after a restart.
+     */
+    private void warmRoutes(DefaultMQProducer p) {
+        // Only the wake-up topic: it is on the hot path of every submission. The lease
+        // topic is written twice per judgement at most and its messages are delayed anyway.
+        warmRoute(p, props.mq().taskTopic(), 0);
+    }
+
+    /**
+     * One no-op message per topic. The consumer ignores a submissionId of 0, so this only
+     * fills the route cache and opens the broker connection ahead of the first real task.
+     */
+    private void warmRoute(DefaultMQProducer p, String topic, int delayLevel) {
+        try {
+            Message m = new Message(topic, "{\"submissionId\":0,\"ts\":0}".getBytes(StandardCharsets.UTF_8));
+            m.setKeys("warmup");
+            if (delayLevel > 0) {
+                m.setDelayTimeLevel(delayLevel);
+            }
+            p.send(m);
+            log.debug("warmed route for topic {}", topic);
+        } catch (Exception e) {
+            log.debug("route warm-up for {} skipped: {}", topic, e.toString());
+        }
     }
 
     public void send(String topic, String key, String payload) throws Exception {
         send(topic, key, payload, 0);
-    }
-
-    /**
+    }    /**
      * Delay-level send. Used for lease alarms: the message arrives when the lease should
      * have expired, and the receiver decides from the database whether it still matters.
      */

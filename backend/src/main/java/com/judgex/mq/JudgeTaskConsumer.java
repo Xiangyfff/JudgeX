@@ -1,5 +1,7 @@
 package com.judgex.mq;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.judgex.config.JudgexProps;
 import com.judgex.service.SchedulerService;
 import jakarta.annotation.PreDestroy;
@@ -33,15 +35,23 @@ public class JudgeTaskConsumer {
 
     private volatile DefaultMQPushConsumer consumer;
     private volatile String state = "DISABLED";
+    private final ObjectMapper mapper = new ObjectMapper();
 
     public JudgeTaskConsumer(JudgexProps props, SchedulerService scheduler) {
         this.props = props;
         this.scheduler = scheduler;
     }
 
+    /**
+     * Start on a background thread: the broker handshake can take seconds on a cold JVM,
+     * and blocking the ready event would keep the dispatcher (started by another listener)
+     * from running until it finishes.
+     */
     @EventListener(ApplicationReadyEvent.class)
     public void onReady() {
-        start();
+        Thread t = new Thread(this::start, "mq-consumer-start");
+        t.setDaemon(true);
+        t.start();
     }
 
     @Scheduled(fixedDelay = 15_000)
@@ -72,11 +82,23 @@ public class JudgeTaskConsumer {
 
     private ConsumeConcurrentlyStatus consume(List<MessageExt> messages,
                                               org.apache.rocketmq.client.consumer.listener.ConsumeConcurrentlyContext ctx) {
+        long now = System.currentTimeMillis();
         for (MessageExt message : messages) {
-            log.debug("wake-up for task message {}", message.getMsgId());
+            log.debug("wake-up for task message {} (broker lag {} ms)", message.getMsgId(), lagOf(message, now));
             scheduler.wakeUp();
         }
         return ConsumeConcurrentlyStatus.CONSUME_SUCCESS;
+    }
+
+    /** Milliseconds between "producer stamped it" and "consumer saw it". */
+    private long lagOf(MessageExt message, long now) {
+        try {
+            ObjectNode node = (ObjectNode) mapper.readTree(message.getBody());
+            long ts = node.path("ts").asLong(0);
+            return ts <= 0 ? -1 : now - ts;
+        } catch (Exception e) {
+            return -1;
+        }
     }
 
     @PreDestroy

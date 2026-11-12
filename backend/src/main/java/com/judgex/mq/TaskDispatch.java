@@ -77,7 +77,11 @@ public class TaskDispatch {
 
     private void ping(long submissionId) {
         pings.incrementAndGet();
-        async(() -> producer.send(props.mq().taskTopic(), "task-" + submissionId, payload(0, submissionId)));
+        long startedAt = System.nanoTime();
+        async(() -> {
+            producer.send(props.mq().taskTopic(), "task-" + submissionId, payload(0, submissionId));
+            log.debug("ping for submission {} sent in {} ms", submissionId, (System.nanoTime() - startedAt) / 1_000_000);
+        });
     }
 
     /** Arm (or re-arm) the alarm for one lease. */
@@ -97,6 +101,8 @@ public class TaskDispatch {
             node.put("taskId", taskId);
         }
         node.put("submissionId", submissionId);
+        // Send timestamp: lets the consumer measure broker + pull latency end to end.
+        node.put("ts", System.currentTimeMillis());
         return node.toString();
     }
 
