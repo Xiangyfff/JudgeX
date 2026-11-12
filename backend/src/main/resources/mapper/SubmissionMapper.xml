@@ -1,0 +1,136 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.judgex.repo.SubmissionMapper">
+
+    <!--
+      One row per submission, already joined with the owner's display name and the
+      problem title, plus the per-submission case counters the list view shows.
+      Timestamps are formatted here so the wire format stays a plain ISO string.
+    -->
+    <sql id="rowSelect">
+        SELECT s.id,
+               s.user_id,
+               u.display_name AS user,
+               s.problem_id,
+               p.title AS problem_title,
+               p.slug AS problem_slug,
+               s.language,
+               s.status,
+               s.verdict,
+               s.score,
+               s.total_time_ms,
+               (SELECT COUNT(*) FROM test_results r
+                 WHERE r.submission_id = s.id AND r.verdict = 'AC') AS passed_cases,
+               (SELECT COUNT(*) FROM test_results r
+                 WHERE r.submission_id = s.id) AS total_cases,
+               DATE_FORMAT(s.created_at, '%Y-%m-%dT%H:%i:%s') AS created_at,
+               DATE_FORMAT(s.finished_at, '%Y-%m-%dT%H:%i:%s') AS finished_at
+        FROM submissions s
+        JOIN users u ON u.id = s.user_id
+        JOIN problems p ON p.id = s.problem_id
+    </sql>
+
+    <insert id="insertRow" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO submissions (user_id, problem_id, language, source_code, status, idem_key)
+        VALUES (#{userId}, #{problemId}, #{language}, #{source}, 'QUEUED', #{idemKey})
+    </insert>
+
+    <select id="selectIdByIdem" resultType="java.lang.Long">
+        SELECT id FROM submissions WHERE user_id = #{userId} AND idem_key = #{idemKey}
+    </select>
+
+    <select id="selectById" resultType="com.judgex.web.dto.Dto$SubmissionRow">
+        <include refid="rowSelect"/>
+        WHERE s.id = #{id}
+    </select>
+
+    <select id="selectList" resultType="com.judgex.web.dto.Dto$SubmissionRow">
+        <include refid="rowSelect"/>
+        <where>
+            <if test="userId != null">AND s.user_id = #{userId}</if>
+            <if test="problemId != null">AND s.problem_id = #{problemId}</if>
+        </where>
+        ORDER BY s.id DESC
+        LIMIT #{limit}
+    </select>
+
+    <select id="selectRecent" resultType="com.judgex.web.dto.Dto$SubmissionRow">
+        <include refid="rowSelect"/>
+        ORDER BY s.id DESC
+        LIMIT #{limit}
+    </select>
+
+    <select id="selectSource" resultType="string">
+        SELECT source_code FROM submissions WHERE id = #{id}
+    </select>
+
+    <select id="selectCompileOutput" resultType="string">
+        SELECT compile_output FROM submissions WHERE id = #{id}
+    </select>
+
+    <select id="results" resultType="com.judgex.web.dto.Dto$TestResultRow">
+        SELECT ordinal, verdict, time_ms, memory_kb, stdout, stderr, points
+        FROM test_results
+        WHERE submission_id = #{submissionId}
+        ORDER BY ordinal
+    </select>
+
+    <update id="markRunningRow">
+        UPDATE submissions
+           SET status = 'RUNNING', started_at = #{now}
+         WHERE id = #{id}
+    </update>
+
+    <update id="finishRow">
+        UPDATE submissions
+           SET status = #{status},
+               verdict = #{verdict},
+               score = #{score},
+               compile_output = #{compileOutput},
+               total_time_ms = #{totalTimeMs},
+               finished_at = #{now}
+         WHERE id = #{id}
+    </update>
+
+    <delete id="deleteResults">
+        DELETE FROM test_results WHERE submission_id = #{submissionId}
+    </delete>
+
+    <update id="resetRow">
+        UPDATE submissions
+           SET status = 'QUEUED', verdict = NULL, started_at = NULL
+         WHERE id = #{id}
+    </update>
+
+    <insert id="insertResult">
+        INSERT INTO test_results (submission_id, case_id, ordinal, verdict,
+                                  time_ms, memory_kb, stdout, stderr, points)
+        VALUES (#{submissionId}, #{caseId}, #{ordinal}, #{verdict},
+                #{timeMs}, #{memoryKb}, #{stdout}, #{stderr}, #{points})
+    </insert>
+
+    <select id="activeCount" resultType="int">
+        SELECT COUNT(*) FROM submissions
+        WHERE user_id = #{userId}
+          AND status IN ('PENDING', 'QUEUED', 'RUNNING')
+    </select>
+
+    <select id="statusOf" resultType="string">
+        SELECT status FROM submissions WHERE id = #{id}
+    </select>
+
+    <select id="countAll" resultType="long">
+        SELECT COUNT(*) FROM submissions
+    </select>
+
+    <select id="bestAccepted" resultType="com.judgex.repo.SubmissionMapper$Best">
+        SELECT COUNT(*) AS solved, COALESCE(SUM(best), 0) AS total_ms
+        FROM (
+            SELECT MIN(total_time_ms) AS best
+            FROM submissions
+            WHERE user_id = #{userId} AND verdict = 'AC'
+            GROUP BY problem_id
+        ) t
+    </select>
+
+</mapper>

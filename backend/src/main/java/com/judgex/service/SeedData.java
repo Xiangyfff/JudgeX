@@ -1,8 +1,8 @@
 package com.judgex.service;
 
 import com.judgex.auth.PasswordHasher;
-import com.judgex.repo.ProblemRepo;
-import com.judgex.repo.UserRepo;
+import com.judgex.repo.ProblemMapper;
+import com.judgex.repo.UserMapper;
 import com.judgex.web.dto.Dto;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -18,10 +18,10 @@ public class SeedData implements ApplicationRunner {
 
     private static final Logger log = LoggerFactory.getLogger(SeedData.class);
 
-    private final UserRepo users;
-    private final ProblemRepo problems;
+    private final UserMapper users;
+    private final ProblemMapper problems;
 
-    public SeedData(UserRepo users, ProblemRepo problems) {
+    public SeedData(UserMapper users, ProblemMapper problems) {
         this.users = users;
         this.problems = problems;
     }

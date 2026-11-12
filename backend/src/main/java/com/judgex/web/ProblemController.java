@@ -3,7 +3,7 @@ package com.judgex.web;
 import com.judgex.auth.AuthFilter;
 import com.judgex.auth.UserPrincipal;
 import com.judgex.common.ApiException;
-import com.judgex.repo.ProblemRepo;
+import com.judgex.repo.ProblemMapper;
 import com.judgex.web.dto.Dto;
 import org.springframework.web.bind.annotation.*;
 
@@ -13,9 +13,9 @@ import java.util.List;
 @RequestMapping("/api/problems")
 public class ProblemController {
 
-    private final ProblemRepo problems;
+    private final ProblemMapper problems;
 
-    public ProblemController(ProblemRepo problems) {
+    public ProblemController(ProblemMapper problems) {
         this.problems = problems;
     }
 

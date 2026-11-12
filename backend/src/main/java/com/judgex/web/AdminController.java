@@ -1,7 +1,7 @@
 package com.judgex.web;
 
 import com.judgex.common.ApiException;
-import com.judgex.repo.ProblemRepo;
+import com.judgex.repo.ProblemMapper;
 import com.judgex.web.dto.Dto;
 import org.springframework.web.bind.annotation.*;
 
@@ -11,9 +11,9 @@ import java.util.List;
 @RequestMapping("/api/admin")
 public class AdminController {
 
-    private final ProblemRepo problems;
+    private final ProblemMapper problems;
 
-    public AdminController(ProblemRepo problems) {
+    public AdminController(ProblemMapper problems) {
         this.problems = problems;
     }
 

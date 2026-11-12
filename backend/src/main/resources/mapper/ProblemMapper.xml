@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.judgex.repo.ProblemMapper">
+
+    <!--
+      Every problem row is decorated with its submission counters. The acceptance
+      rate is computed in SQL (one decimal); COUNT(s.id) = 0 short-circuits the
+      division so an untouched problem reports 0.0 instead of NULL.
+    -->
+    <sql id="summarySelect">
+        SELECT p.id, p.slug, p.title, p.difficulty, p.tags,
+               p.time_limit_ms, p.memory_limit_mb, p.published,
+               COALESCE(SUM(CASE WHEN s.id IS NULL THEN 0 ELSE 1 END), 0) AS submissions,
+               COALESCE(SUM(CASE WHEN s.verdict = 'AC' THEN 1 ELSE 0 END), 0) AS accepted,
+               CASE WHEN COUNT(s.id) = 0 THEN 0.0
+                    ELSE ROUND(SUM(CASE WHEN s.verdict = 'AC' THEN 1 ELSE 0 END) * 1000.0 / COUNT(s.id)) / 10.0
+               END AS accept_rate
+        FROM problems p
+        LEFT JOIN submissions s ON s.problem_id = p.id
+    </sql>
+
+    <sql id="summaryGroupBy">
+        GROUP BY p.id, p.slug, p.title, p.difficulty, p.tags,
+                 p.time_limit_ms, p.memory_limit_mb, p.published
+    </sql>
+
+    <select id="summaries" resultType="com.judgex.web.dto.Dto$ProblemSummary">
+        <include refid="summarySelect"/>
+        <if test="!includeUnpublished">
+            WHERE p.published = 1
+        </if>
+        <include refid="summaryGroupBy"/>
+        ORDER BY p.id
+    </select>
+
+    <select id="selectById" resultType="com.judgex.web.dto.Dto$ProblemSummary">
+        <include refid="summarySelect"/>
+        WHERE p.id = #{id}
+        <include refid="summaryGroupBy"/>
+    </select>
+
+    <select id="selectBySlug" resultType="com.judgex.web.dto.Dto$ProblemSummary">
+        <include refid="summarySelect"/>
+        WHERE p.slug = #{slug}
+        <include refid="summaryGroupBy"/>
+    </select>
+
+    <select id="selectStatement" resultType="string">
+        SELECT statement
+        FROM problems
+        WHERE id = #{id}
+    </select>
+
+    <select id="cases" resultType="com.judgex.web.dto.Dto$TestCaseView">
+        SELECT id, ordinal, input, expected_output, points, hidden
+        FROM test_cases
+        WHERE problem_id = #{problemId}
+        <if test="!includeHidden">
+            AND hidden = 0
+        </if>
+        ORDER BY ordinal
+    </select>
+
+    <select id="judgeCases" resultType="com.judgex.repo.ProblemMapper$JudgeCase">
+        SELECT id, ordinal, input, expected_output, points
+        FROM test_cases
+        WHERE problem_id = #{problemId}
+        ORDER BY ordinal
+    </select>
+
+    <insert id="insertRow" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO problems (slug, title, difficulty, tags, statement,
+                              time_limit_ms, memory_limit_mb, published)
+        VALUES (#{slug}, #{title}, #{difficulty}, #{tags}, #{statement},
+                #{timeLimitMs}, #{memoryLimitMb}, #{published})
+    </insert>
+
+    <update id="updateRow">
+        UPDATE problems
+           SET slug = #{slug},
+               title = #{title},
+               difficulty = #{difficulty},
+               tags = #{tags},
+               statement = #{statement},
+               time_limit_ms = #{timeLimitMs},
+               memory_limit_mb = #{memoryLimitMb},
+               published = #{published}
+         WHERE id = #{id}
+    </update>
+
+    <delete id="deleteCases">
+        DELETE FROM test_cases WHERE problem_id = #{problemId}
+    </delete>
+
+    <delete id="deleteSubmissions">
+        DELETE FROM submissions WHERE problem_id = #{problemId}
+    </delete>
+
+    <delete id="deleteById">
+        DELETE FROM problems WHERE id = #{id}
+    </delete>
+
+    <insert id="insertCaseRow" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO test_cases (problem_id, ordinal, input, expected_output, points, hidden)
+        VALUES (#{problemId}, #{ordinal}, #{input}, #{expectedOutput}, #{points}, #{hidden})
+    </insert>
+
+    <select id="maxOrdinal" resultType="int">
+        SELECT COALESCE(MAX(ordinal), 0) FROM test_cases WHERE problem_id = #{problemId}
+    </select>
+
+    <select id="count" resultType="long">
+        SELECT COUNT(*) FROM problems
+    </select>
+
+</mapper>

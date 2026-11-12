@@ -1,8 +1,8 @@
 package com.judgex.service;
 
 import com.judgex.config.JudgexProps;
-import com.judgex.repo.ProblemRepo;
-import com.judgex.repo.SubmissionRepo;
+import com.judgex.repo.ProblemMapper;
+import com.judgex.repo.SubmissionMapper;
 import com.judgex.redis.LeaderboardService;
 import com.judgex.sandbox.ExecResult;
 import com.judgex.sandbox.LanguageRegistry;
@@ -32,8 +32,8 @@ public class JudgeEngine {
 
     private static final Logger log = LoggerFactory.getLogger(JudgeEngine.class);
 
-    private final SubmissionRepo submissions;
-    private final ProblemRepo problems;
+    private final SubmissionMapper submissions;
+    private final ProblemMapper problems;
     private final LanguageRegistry languages;
     private final SandboxRunner sandbox;
     private final ProgressHub hub;
@@ -41,7 +41,7 @@ public class JudgeEngine {
     private final LeaderboardService leaderboard;
     private final ResultService results;
 
-    public JudgeEngine(SubmissionRepo submissions, ProblemRepo problems, LanguageRegistry languages,
+    public JudgeEngine(SubmissionMapper submissions, ProblemMapper problems, LanguageRegistry languages,
                        SandboxRunner sandbox, ProgressHub hub, JudgexProps props,
                        LeaderboardService leaderboard, ResultService results) {
         this.submissions = submissions;
@@ -93,7 +93,7 @@ public class JudgeEngine {
                 hub.publish(submissionId, "compiled", Map.of("log", compileLog, "timeMs", compile.timeMs()));
             }
 
-            List<ProblemRepo.JudgeCase> cases = problems.judgeCases(row.problemId());
+            List<ProblemMapper.JudgeCase> cases = problems.judgeCases(row.problemId());
             if (cases.isEmpty()) {
                 finish(submissionId, "SYSTEM_ERROR", 0, "problem has no test cases", 0);
                 return;
@@ -104,7 +104,7 @@ public class JudgeEngine {
             long totalTime = 0;
             List<String> verdicts = new ArrayList<>();
 
-            for (ProblemRepo.JudgeCase c : cases) {
+            for (ProblemMapper.JudgeCase c : cases) {
                 ExecResult r = sandbox.exec(lang.runCommand(), workDir, c.input(),
                         row.language().equals("java") ? 6000 : 4000,
                         512,

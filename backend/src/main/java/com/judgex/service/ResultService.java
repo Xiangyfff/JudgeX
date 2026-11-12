@@ -2,8 +2,8 @@ package com.judgex.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.judgex.config.JudgexProps;
-import com.judgex.mq.OutboxRepo;
-import com.judgex.repo.SubmissionRepo;
+import com.judgex.mq.OutboxMapper;
+import com.judgex.repo.SubmissionMapper;
 import com.judgex.web.dto.Dto;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -26,12 +26,12 @@ public class ResultService {
 
     private static final Logger log = LoggerFactory.getLogger(ResultService.class);
 
-    private final SubmissionRepo submissions;
-    private final OutboxRepo outbox;
+    private final SubmissionMapper submissions;
+    private final OutboxMapper outbox;
     private final ObjectMapper mapper;
     private final JudgexProps props;
 
-    public ResultService(SubmissionRepo submissions, OutboxRepo outbox, ObjectMapper mapper, JudgexProps props) {
+    public ResultService(SubmissionMapper submissions, OutboxMapper outbox, ObjectMapper mapper, JudgexProps props) {
         this.submissions = submissions;
         this.outbox = outbox;
         this.mapper = mapper;

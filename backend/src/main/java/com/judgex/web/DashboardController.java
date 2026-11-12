@@ -5,7 +5,7 @@ import com.judgex.auth.UserPrincipal;
 import com.judgex.config.JudgexProps;
 import com.judgex.mq.JudgeResultConsumer;
 import com.judgex.mq.MqProducer;
-import com.judgex.mq.OutboxRepo;
+import com.judgex.mq.OutboxMapper;
 import com.judgex.redis.LeaderboardService;
 import com.judgex.redis.PresenceService;
 import com.judgex.redis.RedisGate;
@@ -32,13 +32,13 @@ public class DashboardController {
     private final RedisGate redis;
     private final PresenceService presence;
     private final LeaderboardService leaderboard;
-    private final OutboxRepo outbox;
+    private final OutboxMapper outbox;
     private final MqProducer mqProducer;
     private final JudgeResultConsumer mqConsumer;
 
     public DashboardController(MetricsService metrics, LanguageRegistry languages, ProgressHub hub,
                                JudgexProps props, RedisGate redis, PresenceService presence,
-                               LeaderboardService leaderboard, OutboxRepo outbox,
+                               LeaderboardService leaderboard, OutboxMapper outbox,
                                MqProducer mqProducer, JudgeResultConsumer mqConsumer) {
         this.metrics = metrics;
         this.languages = languages;

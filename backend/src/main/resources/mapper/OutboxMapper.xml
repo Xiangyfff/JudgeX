@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.judgex.mq.OutboxMapper">
+
+    <insert id="insertEvent">
+        INSERT INTO outbox (event_key, topic, payload, status, attempts, next_attempt_at, created_at)
+        VALUES (#{eventKey}, #{topic}, #{payload}, 'PENDING', 0, #{now}, #{now})
+    </insert>
+
+    <update id="reclaim">
+        UPDATE outbox SET status = 'PENDING'
+        WHERE status = 'SENDING'
+          AND next_attempt_at &lt; #{now}
+    </update>
+
+    <select id="selectDue" resultType="com.judgex.mq.OutboxMapper$Due">
+        SELECT id, event_key, topic, payload, attempts
+        FROM outbox
+        WHERE status = 'PENDING'
+          AND next_attempt_at &lt;= #{now}
+        ORDER BY id
+        LIMIT #{limit}
+    </select>
+
+    <update id="claimRow">
+        UPDATE outbox
+           SET status = 'SENDING', attempts = attempts + 1, next_attempt_at = #{leaseUntil}
+         WHERE id = #{id}
+           AND status = 'PENDING'
+    </update>
+
+    <update id="markSent">
+        UPDATE outbox SET status = 'SENT', sent_at = #{now}, last_error = NULL WHERE id = #{id}
+    </update>
+
+    <update id="markFailed">
+        UPDATE outbox
+           SET status = #{status}, last_error = #{error}, next_attempt_at = #{nextAttempt}
+         WHERE id = #{id}
+    </update>
+
+    <select id="countByStatus" resultType="com.judgex.mq.OutboxMapper$StatusCount">
+        SELECT status, COUNT(*) AS total FROM outbox GROUP BY status
+    </select>
+
+    <select id="selectLastError" resultType="string">
+        SELECT last_error FROM outbox
+        WHERE last_error IS NOT NULL
+        ORDER BY id DESC
+        LIMIT 1
+    </select>
+
+    <insert id="insertNotification">
+        INSERT INTO notifications (submission_id, user_id, verdict, message, created_at)
+        VALUES (#{submissionId}, #{userId}, #{verdict}, #{message}, #{now})
+    </insert>
+
+    <select id="selectNotifications" resultType="com.judgex.mq.OutboxMapper$Notification">
+        SELECT id, submission_id, verdict, message,
+               DATE_FORMAT(created_at, '%Y-%m-%dT%H:%i:%s') AS created_at
+        FROM notifications
+        <if test="userId != null">
+            WHERE user_id = #{userId}
+        </if>
+        ORDER BY id DESC
+        LIMIT #{limit}
+    </select>
+
+</mapper>

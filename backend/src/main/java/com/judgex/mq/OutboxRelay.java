@@ -23,11 +23,11 @@ public class OutboxRelay {
     private static final int BATCH = 20;
     private static final int LEASE_SECONDS = 30;
 
-    private final OutboxRepo outbox;
+    private final OutboxMapper outbox;
     private final MqProducer producer;
     private final JudgexProps props;
 
-    public OutboxRelay(OutboxRepo outbox, MqProducer producer, JudgexProps props) {
+    public OutboxRelay(OutboxMapper outbox, MqProducer producer, JudgexProps props) {
         this.outbox = outbox;
         this.producer = producer;
         this.props = props;
@@ -44,8 +44,8 @@ public class OutboxRelay {
         if (reclaimed > 0) {
             log.warn("reclaimed {} outbox rows whose relay lease expired", reclaimed);
         }
-        List<OutboxRepo.Due> batch = outbox.due(BATCH);
-        for (OutboxRepo.Due row : batch) {
+        List<OutboxMapper.Due> batch = outbox.due(BATCH);
+        for (OutboxMapper.Due row : batch) {
             if (!outbox.claim(row.id(), LocalDateTime.now().plusSeconds(LEASE_SECONDS))) {
                 continue;
             }

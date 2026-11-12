@@ -8,18 +8,20 @@ spring:
   application:
     name: judgex
   datasource:
-    url: jdbc:h2:file:./data/judgex;MODE=MySQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1
-    driver-class-name: org.h2.Driver
-    username: judgex
-    password: judgex
+    # MySQL 8. The schema itself is owned by Flyway (db/migration), not by JPA or schema.sql.
+    url: ${JUDGEX_DB_URL:jdbc:mysql://127.0.0.1:3306/judgex?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true&rewriteBatchedStatements=true}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    username: ${JUDGEX_DB_USER:judgex}
+    password: ${JUDGEX_DB_PASSWORD:judgex}
     hikari:
       maximum-pool-size: 24
       pool-name: judgex-pool
-  sql:
-    init:
-      mode: always
-      schema-locations: classpath:schema.sql
-      continue-on-error: false
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    # A database that already has data (but no flyway_schema_history yet) is adopted at V1.
+    baseline-on-migrate: true
+    validate-on-migrate: true
   jackson:
     serialization:
       write-dates-as-timestamps: false

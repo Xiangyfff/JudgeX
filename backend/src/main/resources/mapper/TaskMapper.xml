@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.judgex.repo.TaskMapper">
+
+    <insert id="insertEnqueue">
+        INSERT INTO judge_tasks (submission_id, status)
+        VALUES (#{submissionId}, 'QUEUED')
+    </insert>
+
+    <select id="selectCandidates" resultType="long">
+        SELECT id FROM judge_tasks
+        WHERE status = 'QUEUED'
+        ORDER BY id
+        LIMIT #{limit}
+    </select>
+
+    <!-- The claim is the whole concurrency story: one UPDATE, no locks, 0 rows = lost race. -->
+    <update id="claim">
+        UPDATE judge_tasks
+           SET status = 'ASSIGNED',
+               worker_id = #{workerId},
+               attempts = attempts + 1,
+               lease_expires_at = #{leaseUntil},
+               updated_at = #{now}
+         WHERE id = #{taskId}
+           AND status = 'QUEUED'
+    </update>
+
+    <select id="selectClaimed" resultType="com.judgex.repo.TaskMapper$ClaimedTask">
+        SELECT id, submission_id, attempts
+        FROM judge_tasks
+        WHERE id = #{taskId}
+    </select>
+
+    <select id="selectExpiredLeases" resultType="com.judgex.repo.TaskMapper$Lease">
+        SELECT id, submission_id, attempts
+        FROM judge_tasks
+        WHERE status = 'ASSIGNED'
+          AND lease_expires_at &lt; #{now}
+        ORDER BY id
+        LIMIT #{limit}
+    </select>
+
+    <update id="requeueRow">
+        UPDATE judge_tasks
+           SET status = 'QUEUED',
+               worker_id = NULL,
+               lease_expires_at = NULL,
+               last_error = 'lease expired',
+               updated_at = #{now}
+         WHERE id = #{taskId}
+           AND status = 'ASSIGNED'
+    </update>
+
+    <update id="renewLeases">
+        UPDATE judge_tasks
+           SET lease_expires_at = #{leaseUntil}, updated_at = #{now}
+         WHERE worker_id = #{workerId}
+           AND status = 'ASSIGNED'
+    </update>
+
+    <update id="complete">
+        UPDATE judge_tasks
+           SET status = 'DONE', lease_expires_at = NULL, updated_at = #{now}
+         WHERE id = #{taskId}
+    </update>
+
+    <update id="deadLetter">
+        UPDATE judge_tasks
+           SET status = 'DEAD', lease_expires_at = NULL, last_error = #{error}, updated_at = #{now}
+         WHERE id = #{taskId}
+    </update>
+
+    <select id="selectSubmissionId" resultType="java.lang.Long">
+        SELECT submission_id FROM judge_tasks WHERE id = #{taskId}
+    </select>
+
+    <select id="countQueued" resultType="int">
+        SELECT COUNT(*) FROM judge_tasks WHERE status = 'QUEUED'
+    </select>
+
+    <select id="countAssigned" resultType="int">
+        SELECT COUNT(*) FROM judge_tasks WHERE status = 'ASSIGNED'
+    </select>
+
+    <select id="countDead" resultType="int">
+        SELECT COUNT(*) FROM judge_tasks WHERE status = 'DEAD'
+    </select>
+
+</mapper>

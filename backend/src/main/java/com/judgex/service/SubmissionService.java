@@ -3,9 +3,9 @@ package com.judgex.service;
 import com.judgex.auth.UserPrincipal;
 import com.judgex.common.ApiException;
 import com.judgex.config.JudgexProps;
-import com.judgex.repo.ProblemRepo;
-import com.judgex.repo.SubmissionRepo;
-import com.judgex.repo.TaskRepo;
+import com.judgex.repo.ProblemMapper;
+import com.judgex.repo.SubmissionMapper;
+import com.judgex.repo.TaskMapper;
 import com.judgex.redis.TokenBucketLimiter;
 import com.judgex.sandbox.LanguageRegistry;
 import com.judgex.web.dto.Dto;
@@ -25,15 +25,15 @@ public class SubmissionService {
 
     private static final Logger log = LoggerFactory.getLogger(SubmissionService.class);
 
-    private final SubmissionRepo submissions;
-    private final ProblemRepo problems;
-    private final TaskRepo tasks;
+    private final SubmissionMapper submissions;
+    private final ProblemMapper problems;
+    private final TaskMapper tasks;
     private final LanguageRegistry languages;
     private final JudgexProps props;
     private final ProgressHub hub;
     private final TokenBucketLimiter limiter;
 
-    public SubmissionService(SubmissionRepo submissions, ProblemRepo problems, TaskRepo tasks,
+    public SubmissionService(SubmissionMapper submissions, ProblemMapper problems, TaskMapper tasks,
                              LanguageRegistry languages, JudgexProps props, ProgressHub hub,
                              TokenBucketLimiter limiter) {
         this.submissions = submissions;

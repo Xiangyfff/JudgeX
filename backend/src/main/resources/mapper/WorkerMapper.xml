@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.judgex.repo.WorkerMapper">
+
+    <!--
+      MySQL upsert. InnoDB only touches the listed columns on conflict, so the
+      original started_at survives a restart — monotonic "uptime" per node.
+    -->
+    <insert id="upsertHeartbeat">
+        INSERT INTO workers (id, host, concurrency, active_tasks, last_heartbeat, started_at)
+        VALUES (#{id}, #{host}, #{concurrency}, #{activeTasks}, #{now}, #{now})
+        ON DUPLICATE KEY UPDATE
+            host = VALUES(host),
+            concurrency = VALUES(concurrency),
+            active_tasks = VALUES(active_tasks),
+            last_heartbeat = VALUES(last_heartbeat)
+    </insert>
+
+    <select id="selectAll" resultType="com.judgex.web.dto.Dto$WorkerView">
+        SELECT id,
+               host,
+               concurrency,
+               active_tasks,
+               DATE_FORMAT(last_heartbeat, '%Y-%m-%dT%H:%i:%s') AS last_heartbeat,
+               TIMESTAMPDIFF(SECOND, last_heartbeat, #{now}) * 1000 AS heartbeat_age_ms,
+               CASE WHEN TIMESTAMPDIFF(SECOND, last_heartbeat, #{now}) * 1000 > #{staleAfterMs}
+                    THEN 'STALE' ELSE 'ONLINE' END AS state
+        FROM workers
+        ORDER BY id
+    </select>
+
+    <select id="sumCapacitySince" resultType="int">
+        SELECT COALESCE(SUM(concurrency), 0) FROM workers WHERE last_heartbeat &gt; #{threshold}
+    </select>
+
+    <select id="countOnlineSince" resultType="int">
+        SELECT COUNT(*) FROM workers WHERE last_heartbeat &gt; #{threshold}
+    </select>
+
+    <delete id="deleteStaleBefore">
+        DELETE FROM workers WHERE last_heartbeat &lt; #{threshold}
+    </delete>
+
+</mapper>

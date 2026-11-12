@@ -5,7 +5,7 @@ import com.judgex.auth.JwtService;
 import com.judgex.auth.PasswordHasher;
 import com.judgex.auth.UserPrincipal;
 import com.judgex.common.ApiException;
-import com.judgex.repo.UserRepo;
+import com.judgex.repo.UserMapper;
 import com.judgex.web.dto.Dto;
 import org.springframework.web.bind.annotation.*;
 
@@ -15,17 +15,17 @@ import java.util.Map;
 @RequestMapping("/api/auth")
 public class AuthController {
 
-    private final UserRepo users;
+    private final UserMapper users;
     private final JwtService jwt;
 
-    public AuthController(UserRepo users, JwtService jwt) {
+    public AuthController(UserMapper users, JwtService jwt) {
         this.users = users;
         this.jwt = jwt;
     }
 
     @PostMapping("/login")
     public Dto.LoginResponse login(@RequestBody Dto.LoginRequest req) {
-        UserRepo.UserRow row = users.findByUsername(req.username() == null ? "" : req.username().trim())
+        UserMapper.UserRow row = users.findByUsername(req.username() == null ? "" : req.username().trim())
                 .orElseThrow(() -> new ApiException(
                         org.springframework.http.HttpStatus.UNAUTHORIZED, "BAD_CREDENTIALS", "用户名或密码错误"));
         if (!PasswordHasher.matches(req.password() == null ? "" : req.password(), row.passwordHash())) {

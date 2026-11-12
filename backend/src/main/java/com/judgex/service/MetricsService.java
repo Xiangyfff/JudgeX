@@ -1,9 +1,9 @@
 package com.judgex.service;
 
-import com.judgex.repo.MetricsRepo;
-import com.judgex.repo.SubmissionRepo;
-import com.judgex.repo.TaskRepo;
-import com.judgex.repo.WorkerRepo;
+import com.judgex.repo.MetricsMapper;
+import com.judgex.repo.SubmissionMapper;
+import com.judgex.repo.TaskMapper;
+import com.judgex.repo.WorkerMapper;
 import com.judgex.sandbox.LanguageRegistry;
 import com.judgex.sandbox.SandboxRouter;
 import com.judgex.web.dto.Dto;
@@ -22,17 +22,17 @@ public class MetricsService {
     private static final DateTimeFormatter HHMMSS = DateTimeFormatter.ofPattern("HH:mm:ss");
     private static final int SERIES_POINTS = 48;
 
-    private final TaskRepo tasks;
-    private final WorkerRepo workers;
-    private final SubmissionRepo submissions;
-    private final MetricsRepo metrics;
+    private final TaskMapper tasks;
+    private final WorkerMapper workers;
+    private final SubmissionMapper submissions;
+    private final MetricsMapper metrics;
     private final LanguageRegistry languages;
     private final SandboxRouter sandbox;
 
     private final Deque<Dto.QueuePoint> series = new ArrayDeque<>();
 
-    public MetricsService(TaskRepo tasks, WorkerRepo workers, SubmissionRepo submissions,
-                          MetricsRepo metrics, LanguageRegistry languages, SandboxRouter sandbox) {
+    public MetricsService(TaskMapper tasks, WorkerMapper workers, SubmissionMapper submissions,
+                          MetricsMapper metrics, LanguageRegistry languages, SandboxRouter sandbox) {
         this.tasks = tasks;
         this.workers = workers;
         this.submissions = submissions;

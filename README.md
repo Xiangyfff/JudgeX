@@ -6,7 +6,9 @@
     <img src="https://img.shields.io/badge/Java-17-E76F00?style=flat-square" alt="Java 17">
     <img src="https://img.shields.io/badge/Spring%20Boot-3.5.16-6DB33F?style=flat-square" alt="Spring Boot 3.5.16">
     <img src="https://img.shields.io/badge/Vue-3-42B883?style=flat-square" alt="Vue 3">
-    <img src="https://img.shields.io/badge/H2-2.3-09476B?style=flat-square" alt="H2">
+    <img src="https://img.shields.io/badge/MySQL-8.0-4479A1?style=flat-square" alt="MySQL 8.0">
+    <img src="https://img.shields.io/badge/MyBatis-3.5-DC382D?style=flat-square" alt="MyBatis 3.5">
+    <img src="https://img.shields.io/badge/Flyway-11-CC0200?style=flat-square" alt="Flyway 11">
     <img src="https://img.shields.io/badge/Redis-7-DC382D?style=flat-square" alt="Redis 7">
     <img src="https://img.shields.io/badge/RocketMQ-5.3.1-D77310?style=flat-square" alt="RocketMQ 5.3.1">
     <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue?style=flat-square" alt="MIT License"></a>
@@ -88,7 +90,7 @@ sequenceDiagram
     actor User as 用户
     participant Web as Vue 工作台
     participant API as Spring Boot
-    participant DB as H2
+    participant DB as MySQL
     participant Worker as 判题 Worker
     participant Box as 沙箱
 
@@ -112,9 +114,9 @@ sequenceDiagram
 | 层次 | 技术 | 用途 |
 | :--- | :--- | :--- |
 | Web | Vue 3、Vite、TypeScript、SSE | 题库、编辑器、逐用例进度与监控台 |
-| API | Java 17、Spring Boot 3.5.16、JdbcTemplate | 鉴权、提交、调度与 REST API |
+| API | Java 17、Spring Boot 3.5.16、MyBatis 3.5 | 鉴权、提交、调度与 REST API |
 | 执行 | ProcessBuilder、Docker | 编译运行与进程级隔离，两套沙箱共用一套接口 |
-| 数据 | H2（文件模式） | 题目、提交、任务、租约与发件箱 |
+| 数据 | MySQL 8.0、Flyway 11 | 题目、提交、任务、租约与发件箱；表结构由版本化脚本演进 |
 | 异步与缓存 | RocketMQ 5.3.1、Redis 7 | 结果事件投递；限流、节点存活与排行榜 |
 | 观测 | Micrometer 风格指标、SSE | 队列深度、心跳、吞吐与端到端耗时 |
 
@@ -124,12 +126,26 @@ sequenceDiagram
 
 | 组件 | 要求 | 说明 |
 | :--- | :--- | :--- |
-| JDK | 17 | 后端运行环境，唯一必需项 |
+| JDK | 17 | 后端运行环境 |
+| MySQL | 8.0 | 必需，表结构由 Flyway 在启动时自动建好 |
 | Node.js | 22 | 仅在需要重新构建前端时使用 |
 | Redis | 7 | 可选，缺失时自动降级到内存实现 |
 | Docker | 可选 | 跑 RocketMQ，或把沙箱切换到容器隔离 |
 
-### 1. 启动后端
+### 1. 准备数据库（只需一次）
+
+```sql
+CREATE DATABASE judgex CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
+CREATE USER 'judgex'@'%' IDENTIFIED BY 'judgex';
+GRANT ALL PRIVILEGES ON judgex.* TO 'judgex'@'%';
+```
+
+Flyway 只建表、不建库，所以库要手动建；库里的 10 张表由启动时的迁移脚本自动创建。
+
+默认连 `127.0.0.1:3306/judgex`，账号 `judgex/judgex`，可用环境变量覆盖：
+`JUDGEX_DB_URL`、`JUDGEX_DB_USER`、`JUDGEX_DB_PASSWORD`。
+
+### 2. 启动后端
 
 ```bash
 cd backend
@@ -144,11 +160,25 @@ java -jar target/judgex-backend-1.0.0.jar
 | `chen` | `student123` | 学生（用于对比"全部提交"） |
 | `admin` | `admin123` | 管理员，多一个题库管理页 |
 
-首次启动自动建库并写入 6 道题、每题 5 个测试点。数据在 `backend/data/`，删除该目录即重置。
+首次启动时 Flyway 执行 `db/migration` 下的脚本建表（版本记录在 `flyway_schema_history`），随后写入 6 道题、每题 5 个测试点。想彻底重置：`DROP DATABASE judgex` 后重新建库。
 
 端口默认 18900：本机 8080、3306、6379 已被其他项目占用，需要修改时设置 `JUDGEX_PORT`。
 
-### 2. 可选中间件
+### 3. 改表结构
+
+不要改 `V1__init.sql`——Flyway 会记住每个已执行脚本的 checksum，改一个字符启动就失败。改表就新增一个脚本：
+
+```text
+backend/src/main/resources/db/migration/V2__add_problem_hint.sql
+```
+
+规则三条：
+
+- 版本号只增不减，文件名 `V{版本}__{描述}.sql`
+- 只写增量 DDL（`ALTER TABLE` / `CREATE TABLE`），不重复写已有建表语句
+- 加列给默认值、删列分两次发布，让上一版代码还能跑
+
+### 4. 可选中间件
 
 Redis 与 RocketMQ 都不是必需的，不启动只会少一层加速或事件投递，判题链路不受影响。
 
@@ -164,7 +194,7 @@ docker run -d --name judgex-mq-broker --network judgex-mq -p 10913:10913 \
   apache/rocketmq:5.3.1 sh mqbroker -c /home/rocketmq/broker.conf
 ```
 
-### 3. 从源码构建
+### 5. 从源码构建
 
 ```bash
 cd frontend
@@ -182,6 +212,9 @@ java -jar target/judgex-backend-1.0.0.jar
 
 | 现象 | 处理方式 |
 | :--- | :--- |
+| 启动报 `Unknown database 'judgex'` | 先按"准备数据库"建库，Flyway 只建表不建库 |
+| 启动报 `Access denied for user 'judgex'` | 账号没建或密码不符，检查 `JUDGEX_DB_*` 三个环境变量 |
+| 启动报 `Flyway ... checksum mismatch` | 改到了已应用的脚本；恢复原文件，改表请新增 `Vn__` 脚本 |
 | 端口被占用 | 设置 `JUDGEX_PORT`，或先释放 18900 |
 | 控制台告警 Redis 连接失败 | 属正常降级，限流走内存、排行榜返回空；需要时再启动 Redis |
 | 监控台消息通道显示 DEGRADED | broker 不可用，事件留在发件箱；broker 恢复后自动追平 |
@@ -195,11 +228,15 @@ JudgeX
 ├── backend/                 # Spring Boot 单体 + 判题 Worker
 │   └── src/main/java/com/judgex/
 │       ├── auth/            # JWT、密码哈希、请求过滤
-│       ├── repo/            # 全部 JdbcTemplate
+│       ├── config/          # MyBatis 会话工厂
+│       ├── repo/            # MyBatis Mapper 接口
 │       ├── sandbox/         # local / docker 两套实现
 │       ├── service/         # 判题引擎、调度、SSE、发件箱
 │       ├── redis/           # 限流、存活键、排行榜
 │       └── mq/              # producer、relay、消费端
+│   └── src/main/resources/
+│       ├── mapper/          # Mapper XML，SQL 都在这里
+│       └── db/migration/    # Flyway 版本化建表脚本
 ├── frontend/                # Vue 3 工作台
 │   └── src/
 │       ├── views/           # 登录、题库、做题、记录、监控、管理
@@ -210,7 +247,7 @@ JudgeX
 
 ## 性能
 
-判题平台的瓶颈不在请求量，在 CPU 秒。下面这组数字是本机（4 核、H2、4 个判题槽位）实测的，压测脚本是 `tmp/loadtest.mjs` 和 `tmp/burst.mjs`，可以复跑。
+判题平台的瓶颈不在请求量，在 CPU 秒。下面这组数字是在迁移到 MySQL 之前的 H2 版本上测的（本机 4 核、4 个判题槽位），压测脚本是 `tmp/loadtest.mjs` 和 `tmp/burst.mjs`，可以复跑。
 
 | 维度 | 场景 | 结果 |
 | --- | --- | --- |
@@ -231,7 +268,8 @@ JudgeX
 - local 模式下仅 Java 与 Node 设了内存上限，Python、C++ 没有；内存用量也拿不到准确值，页面显示 `—` 而不是编造数字。
 - 调度为单节点扫表。多节点下 CAS 仍然安全，但回收扫描会重复，替换为 `SKIP LOCKED` 或独立租约表更合适。
 - 限流按用户维度，多实例依赖 Redis 共享配额；内存回退版只在单机准确。
-- H2 为单文件库，适合演示与单机部署。迁移 MySQL 只需调整数据源与方言，SQL 中没有 H2 专有语法。
+- 表结构由 Flyway 管：脚本一旦执行就不能改，改表要新增 `Vn__` 脚本。迁移到 MySQL 后接口多了一跳网络往返，上面的压测数字没有重跑。
+- 判题还没有用题目配置的时限与内存：执行器对每种语言固定超时（普通 4 秒、Java 6 秒）与 512MB，题目里的 `time_limit_ms`、`memory_limit_mb` 目前只用于展示。
 
 ## License
 

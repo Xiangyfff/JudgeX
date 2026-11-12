@@ -6,7 +6,7 @@
 
 ## 1. 数据模型
 
-8 张表，全部 JdbcTemplate 手写 SQL（没有 JPA——这个场景里查询形态固定，SQL 比 ORM 更好读也更好调）。
+10 张表（8 张核心表 + 事务发件箱与通知），SQL 全部写在 MyBatis 的 Mapper XML 里（没有 JPA——这个场景里查询形态固定，SQL 比 ORM 更好读也更好调）；表结构由 Flyway 的版本化脚本演进，启动时自动执行。
 
 | 表 | 职责 | 关键约束 |
 | --- | --- | --- |
@@ -15,7 +15,7 @@
 | `test_cases` | 测试点：输入、期望输出、分值、是否可见 | 索引 `(problem_id, ordinal)` |
 | `submissions` | 一次提交：源码、语言、总判定、得分、耗时 | **唯一索引 `(user_id, idem_key)`** |
 | `test_results` | 每个测试点的结果：判定、耗时、内存、实际输出 | 索引 `(submission_id, ordinal)` |
-| `judge_tasks` | 判题任务：状态、持有者、租约、重试次数、版本号 | 索引 `(status, id)` |
+| `judge_tasks` | 判题任务：状态、持有者、租约、重试次数、最后一次错误 | 索引 `(status, id)` |
 | `workers` | 节点心跳：最后心跳时间、并发上限、当前负载 | 主键 `worker_id` |
 | `audit_log` | 管理端变更留痕 | — |
 
@@ -40,7 +40,7 @@
                                    submission 终态，不再流转
 ```
 
-- **每次流转都带版本号**（`version = version + 1`），写入时 `WHERE version = ?`，防止两个线程同时改同一行。
+- **状态流转用条件更新而不是版本号**：认领是 `UPDATE ... WHERE id = ? AND status = 'QUEUED'`，影响 0 行就说明被别人抢走了。没有 `version` 列，也就不存在读-改-写这种竞态窗口，多实例部署不需要额外加锁。
 - **`SUCCESS` 与 `AC` 的区别**：`SUCCESS` 是"任务跑完了"，`AC` 是"全部用例通过"。任务成功但答案错误，提交判定是 `WA`。
 - 终态不可逆：一旦 `submissions.status` 落终态，后续任何事件都只做幂等忽略。
 

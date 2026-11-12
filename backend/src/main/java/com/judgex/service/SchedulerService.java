@@ -1,9 +1,9 @@
 package com.judgex.service;
 
 import com.judgex.config.JudgexProps;
-import com.judgex.repo.SubmissionRepo;
-import com.judgex.repo.TaskRepo;
-import com.judgex.repo.WorkerRepo;
+import com.judgex.repo.SubmissionMapper;
+import com.judgex.repo.TaskMapper;
+import com.judgex.repo.WorkerMapper;
 import com.judgex.redis.PresenceService;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
@@ -36,9 +36,9 @@ public class SchedulerService {
     private static final Logger log = LoggerFactory.getLogger(SchedulerService.class);
     private static final int MAX_ATTEMPTS = 3;
 
-    private final TaskRepo tasks;
-    private final SubmissionRepo submissions;
-    private final WorkerRepo workers;
+    private final TaskMapper tasks;
+    private final SubmissionMapper submissions;
+    private final WorkerMapper workers;
     private final JudgeEngine engine;
     private final ProgressHub hub;
     private final JudgexProps props;
@@ -50,7 +50,7 @@ public class SchedulerService {
     private final String workerId;
     private final String host;
 
-    public SchedulerService(TaskRepo tasks, SubmissionRepo submissions, WorkerRepo workers,
+    public SchedulerService(TaskMapper tasks, SubmissionMapper submissions, WorkerMapper workers,
                             JudgeEngine engine, ProgressHub hub, JudgexProps props,
                             PresenceService presence) {
         this.tasks = tasks;
@@ -101,7 +101,7 @@ public class SchedulerService {
                 List<Long> candidates = tasks.candidates(1);
                 for (Long taskId : candidates) {
                     if (tasks.tryClaim(taskId, workerId, props.worker().leaseSeconds())) {
-                        TaskRepo.ClaimedTask task = tasks.claimed(taskId);
+                        TaskMapper.ClaimedTask task = tasks.claimed(taskId);
                         active.incrementAndGet();
                         claimed = true;
                         pool.execute(() -> runTask(task));
@@ -121,7 +121,7 @@ public class SchedulerService {
         }
     }
 
-    private void runTask(TaskRepo.ClaimedTask task) {
+    private void runTask(TaskMapper.ClaimedTask task) {
         try {
             engine.judge(task.submissionId());
             tasks.complete(task.id());
@@ -144,8 +144,8 @@ public class SchedulerService {
         if (!props.worker().enabled()) {
             return;
         }
-        List<TaskRepo.Lease> expired = tasks.expiredLeases(20);
-        for (TaskRepo.Lease lease : expired) {
+        List<TaskMapper.Lease> expired = tasks.expiredLeases(20);
+        for (TaskMapper.Lease lease : expired) {
             if (lease.attempts() >= MAX_ATTEMPTS) {
                 tasks.deadLetter(lease.taskId(), "lease expired after " + lease.attempts() + " attempts");
                 submissions.finish(lease.submissionId(), "DONE", "SYSTEM_ERROR", 0,

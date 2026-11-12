@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.judgex.repo.MetricsMapper">
+
+    <select id="countSince" resultType="long">
+        SELECT COUNT(*) FROM submissions WHERE created_at &gt;= #{since}
+    </select>
+
+    <select id="countAll" resultType="long">
+        SELECT COUNT(*) FROM submissions
+    </select>
+
+    <select id="countAccepted" resultType="long">
+        SELECT COUNT(*) FROM submissions WHERE verdict = 'AC'
+    </select>
+
+    <!-- Average judge latency over the last 200 finished runs — steady state, not all-time. -->
+    <select id="avgJudgeMs" resultType="long">
+        SELECT CAST(COALESCE(AVG(total_time_ms), 0) AS SIGNED)
+        FROM (
+            SELECT total_time_ms
+            FROM submissions
+            WHERE finished_at IS NOT NULL
+            ORDER BY id DESC
+            LIMIT 200
+        ) t
+    </select>
+
+</mapper>

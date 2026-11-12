@@ -30,13 +30,13 @@ public class JudgeResultConsumer {
     private static final Logger log = LoggerFactory.getLogger(JudgeResultConsumer.class);
 
     private final JudgexProps props;
-    private final OutboxRepo outbox;
+    private final OutboxMapper outbox;
     private final ObjectMapper mapper;
 
     private volatile DefaultMQPushConsumer consumer;
     private volatile String state = "DISABLED";
 
-    public JudgeResultConsumer(JudgexProps props, OutboxRepo outbox, ObjectMapper mapper) {
+    public JudgeResultConsumer(JudgexProps props, OutboxMapper outbox, ObjectMapper mapper) {
         this.props = props;
         this.outbox = outbox;
         this.mapper = mapper;

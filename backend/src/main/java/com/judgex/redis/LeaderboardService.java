@@ -1,7 +1,7 @@
 package com.judgex.redis;
 
 import com.judgex.config.JudgexProps;
-import com.judgex.repo.SubmissionRepo;
+import com.judgex.repo.SubmissionMapper;
 import com.judgex.web.dto.Dto;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -30,9 +30,9 @@ public class LeaderboardService {
 
     private final RedisGate gate;
     private final String prefix;
-    private final SubmissionRepo submissions;
+    private final SubmissionMapper submissions;
 
-    public LeaderboardService(RedisGate gate, JudgexProps props, SubmissionRepo submissions) {
+    public LeaderboardService(RedisGate gate, JudgexProps props, SubmissionMapper submissions) {
         this.gate = gate;
         this.prefix = props.redis() == null ? "jx:" : props.redis().keyPrefix();
         this.submissions = submissions;
@@ -44,7 +44,7 @@ public class LeaderboardService {
             return;
         }
         try {
-            SubmissionRepo.Best best = submissions.bestAccepted(userId);
+            SubmissionMapper.Best best = submissions.bestAccepted(userId);
             double score = best.solved() * 1_000_000d + Math.max(0, 999_999d - best.totalMs());
             String member = String.valueOf(userId);
             gate.template().opsForZSet().add(prefix + "lb", member, score);
