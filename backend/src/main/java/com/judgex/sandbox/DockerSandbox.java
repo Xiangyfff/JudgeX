@@ -6,10 +6,12 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -36,6 +38,11 @@ public class DockerSandbox implements SandboxRunner {
     }
 
     @Override
+    public boolean container() {
+        return true;
+    }
+
+    @Override
     public boolean available() {
         long now = System.currentTimeMillis();
         if (cachedAvailable != null && now - checkedAt < 30_000) {
@@ -59,8 +66,13 @@ public class DockerSandbox implements SandboxRunner {
         if (!available()) {
             return ExecResult.systemError("docker daemon unavailable");
         }
+        // Named per run so a timeout can kill the container itself. Destroying only the
+        // docker client leaves the container running and keeps the stdout pipe open, which
+        // is exactly how a busy loop used to hang the judge forever.
+        String containerName = "judgex-" + UUID.randomUUID().toString().substring(0, 12);
         List<String> docker = new ArrayList<>(List.of(
                 "docker", "run", "--rm", "-i",
+                "--name", containerName,
                 "--network", "none",
                 "--memory", memoryMb + "m",
                 "--memory-swap", memoryMb + "m",
@@ -85,30 +97,52 @@ public class DockerSandbox implements SandboxRunner {
                     os.write(stdin.getBytes(StandardCharsets.UTF_8));
                 }
             }
-            // Drain stderr on its own thread: reading stdout to EOF first deadlocks the moment
-            // the child fills the stderr pipe buffer, and the timeout would then fire on a
-            // program that was never actually slow.
+
+            StringBuilder outBuf = new StringBuilder();
             StringBuilder errBuf = new StringBuilder();
-            Thread errReader = new Thread(() -> {
-                String text = readCapped(p.getErrorStream(), maxOutputBytes);
-                synchronized (errBuf) {
-                    errBuf.append(text);
-                }
-            }, "docker-stderr");
-            errReader.setDaemon(true);
+            boolean[] overflow = {false};
+            // Both pipes are drained on their own threads: reading them in the calling thread
+            // would block until the program exits, so a program that never exits would never
+            // reach the timeout check below.
+            Thread outReader = reader("docker-stdout", p.getInputStream(), outBuf, maxOutputBytes, () -> {
+                overflow[0] = true;
+                kill(p, containerName);
+            });
+            Thread errReader = reader("docker-stderr", p.getErrorStream(), errBuf, maxOutputBytes, () -> kill(p, containerName));
+            outReader.start();
             errReader.start();
-            String out = readCapped(p.getInputStream(), maxOutputBytes);
-            boolean finished = p.waitFor(timeoutMs, TimeUnit.MILLISECONDS);
-            if (!finished) {
-                p.destroyForcibly();
+
+            // Wait for the container, but bail out early when the output cap already killed it:
+            // otherwise an output flood would burn the whole time limit before being scored.
+            long deadline = System.nanoTime() + timeoutMs * 1_000_000L;
+            boolean finished = false;
+            while (System.nanoTime() < deadline) {
+                if (p.waitFor(20, TimeUnit.MILLISECONDS)) {
+                    finished = true;
+                    break;
+                }
+                if (overflow[0]) {
+                    break;
+                }
             }
+            if (!finished && p.isAlive()) {
+                log.warn("container {} exceeded {} ms (or output cap), killing it", containerName, timeoutMs);
+                kill(p, containerName);
+            }
+            outReader.join(2000);
             errReader.join(2000);
-            String err;
-            synchronized (errBuf) {
-                err = errBuf.toString();
+
+            int exit = -1;
+            if (finished) {
+                try {
+                    exit = p.exitValue();
+                } catch (IllegalThreadStateException ignored) {
+                    // killed between waitFor returning and reading the exit code
+                }
             }
             long elapsed = (System.nanoTime() - start) / 1_000_000;
-            return new ExecResult(finished ? p.exitValue() : -1, out, err, elapsed, 0, !finished, false, null);
+            return new ExecResult(exit, outBuf.toString(), errBuf.toString(), elapsed, 0, !finished,
+                    overflow[0], null);
         } catch (IOException e) {
             return ExecResult.systemError("docker exec failed: " + e.getMessage());
         } catch (InterruptedException e) {
@@ -117,13 +151,42 @@ public class DockerSandbox implements SandboxRunner {
         }
     }
 
-    private String readCapped(java.io.InputStream in, int max) {
+    private Thread reader(String name, InputStream in, StringBuilder sink, int max, Runnable onOverflow) {
+        Thread t = new Thread(() -> {
+            byte[] buf = new byte[4096];
+            int total = 0;
+            boolean fired = false;
+            try {
+                int n;
+                while ((n = in.read(buf)) > 0) {
+                    if (total < max) {
+                        int take = Math.min(n, max - total);
+                        sink.append(new String(buf, 0, take, StandardCharsets.UTF_8));
+                    }
+                    total += n;
+                    if (total >= max && !fired) {
+                        fired = true;
+                        onOverflow.run();
+                    }
+                }
+            } catch (IOException ignored) {
+                // pipe closed because the container was killed
+            }
+        }, name);
+        t.setDaemon(true);
+        return t;
+    }
+
+    private void kill(Process p, String containerName) {
+        // Fire and forget: waiting for the docker CLI here would make every killed case pay
+        // the same multi-second timeout that the container itself is being punished for.
         try {
-            byte[] bytes = in.readNBytes(max);
-            return new String(bytes, StandardCharsets.UTF_8);
-        } catch (IOException e) {
-            return "";
+            new ProcessBuilder("docker", "kill", "-s", "KILL", containerName)
+                    .redirectErrorStream(true).start();
+        } catch (Exception e) {
+            log.debug("docker kill {} failed: {}", containerName, e.toString());
         }
+        p.destroyForcibly();
     }
 
     public void logFallback() {

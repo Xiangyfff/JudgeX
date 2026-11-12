@@ -103,22 +103,24 @@ Worker 循环（事件驱动，2s 兜底）:
 
 ## 5. 沙箱：七层里真正落地了几层
 
-威胁模型与对策（`local` 模式的实际实现）：
+威胁模型与对策（两档都已实测，数据见 [`SANDBOX-TESTS.md`](SANDBOX-TESTS.md)）：
 
-| 威胁 | `local` 模式 | `docker` 模式（已实现，需 daemon） |
+| 威胁 | `local` 模式 | `docker` 模式 |
 | --- | --- | --- |
-| 死循环 / 睡死 | `waitFor(timeout)` + 杀整个进程树（执行期间采样 `descendants()`） | 容器 `--stop-timeout` + `docker kill` |
-| 内存炸弹 | Java/Node 的堆上限取自题目配置；Python/C++ 无法在 Windows 上限制 | `--memory` + `--memory-swap` |
-| fork bomb | 无法在 Windows 上限制（Linux 可 `ulimit -u`） | `--pids-limit` |
-| 读宿主文件 | 工作目录隔离，但**不阻止**读绝对路径 | 只读根 + 仅挂载工作目录 |
-| 写宿主文件 | 只写自己的临时目录 | `--read-only` + tmpfs |
-| 联网 | **不阻止** | `--network none` |
-| 提权 / 逃逸 | 不阻止（同用户态） | `--cap-drop ALL` + `no-new-privileges`（尚未配置 user namespace 与 seccomp profile） |
-| 输出洪水 | 读取线程 64KB 截断，标记 `OLE` | 同左（管道在宿主侧截断） |
+| 死循环 / 睡死 | `waitFor(timeout)` + 杀整个进程树（执行期间采样 `descendants()`） | 每次执行一个容器名，超时 `docker kill -s KILL` 杀容器本身（实测 2049～2059 ms） |
+| 内存炸弹 | Java/Node 的堆上限取自题目配置；Python/C++ 无法在 Windows 上限制 | `--memory` + `--memory-swap`，Python 撑爆被 OOM kill，退出码 137 判 `MLE` |
+| fork bomb | 无法在 Windows 上限制（Linux 可 `ulimit -u`） | `--pids-limit 64`，实测 fork 失败 |
+| 读宿主文件 | 工作目录隔离，但**不阻止**读绝对路径 | 只读根 + 仅挂载工作目录，实测读 `win.ini` 报 `FileNotFoundError` |
+| 写宿主文件 | 只写自己的临时目录 | `--read-only`，实测写 `/` 报 `Read-only file system`；`/tmp` 是 tmpfs |
+| 联网 | **不阻止** | `--network none`，实测连本机 3306 被拒 |
+| 提权 / 逃逸 | 不阻止（同用户态） | `--cap-drop ALL` + `no-new-privileges`；**仍是 root，尚未配置 user namespace 与 seccomp profile** |
+| 输出洪水 | 读取线程 64KB 截断，标记 `OLE` | 同左（管道在宿主侧截断），实测 360～504 ms 判 `OLE` |
 
-**这是一份诚实的边界表**：`local` 模式适合"自己的学生写自己的作业"，不适合公网。真正的隔离必须靠内核能力，而 Windows 上没有 cgroup/namespace，所以 `DockerSandbox` 按同一接口实现，切换只需 `JUDGEX_SANDBOX=docker`。
+**这是一份诚实的边界表**：`local` 模式适合"自己的学生写自己的作业"，不适合公网；`docker` 模式把文件系统、网络、内存、pid 四块补齐了，但还没解决"容器内 root + 无 seccomp"这一层。
 
-表里那几条「不阻止」不是推测，是实测：提交的代码读到了 `C:\Windows\win.ini`、连上了本机 3306、起的子进程在父进程退出后还活了 25 秒。完整数据（7 种判定、边界值、隔离性反向测试、并发与清理）见 [`SANDBOX-TESTS.md`](SANDBOX-TESTS.md)。其中「子进程逃逸」已经修掉：执行期间每 100 毫秒采样一次进程树，结束时整棵杀掉，单用例从 4.35 秒回到 0.42 秒，工作目录也不再残留。
+表里的每一行都有实测对应：`local` 模式下提交的代码读到了 `C:\Windows\win.ini`、连上了本机 3306；同样的代码在 `docker` 模式下分别报 `FileNotFoundError` 与连接失败。完整数据（7 种判定、边界值、隔离性反向测试、容器模式 17 个用例、并发与清理）见 [`SANDBOX-TESTS.md`](SANDBOX-TESTS.md)。
+
+容器模式落地时踩到的四个坑也记录在案：`SandboxRouter` 没有转发 `container()`，导致容器里执行宿主机绝对路径（所有提交 CE）；超时只杀 `docker run` 客户端、容器与管道还活着，一个 `while(true)` 能把提交永久挂在 RUNNING；输出超限被判成 TLE 而不是 OLE；容器 OOM（退出码 137）被判成 RE。
 
 代码里的取舍：**先做"一定会发生"的防护（超时、内存、输出），再做"可能发生"的防护（文件、网络、提权）**。前者不做，平台五分钟就被一个 `while(true)` 打死；后者不做，是安全债，要在部署前还。
 

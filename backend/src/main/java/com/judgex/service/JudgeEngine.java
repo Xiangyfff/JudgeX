@@ -83,7 +83,7 @@ public class JudgeEngine {
             Files.writeString(workDir.resolve(lang.extension()), source, StandardCharsets.UTF_8);
 
             if (lang.needsCompile()) {
-                ExecResult compile = sandbox.exec(lang.compileCommand(), workDir, "",
+                ExecResult compile = sandbox.exec(lang.compileCommand(sandbox.container()), workDir, "",
                         30_000, 512, props.sandbox().maxOutputBytes());
                 String compileLog = combined(compile);
                 if (compile.error() != null) {
@@ -115,7 +115,7 @@ public class JudgeEngine {
                 int limitMs = c.timeLimitMs() > 0 ? c.timeLimitMs() : 2000;
                 // JVM startup is not the solution's cost, so Java gets a fixed grace on top.
                 int timeoutMs = limitMs + ("java".equals(row.language()) ? 2000 : 0);
-                ExecResult r = sandbox.exec(lang.runCommand(memoryMb), workDir, c.input(),
+                ExecResult r = sandbox.exec(lang.runCommand(memoryMb, sandbox.container()), workDir, c.input(),
                         timeoutMs, memoryMb, props.sandbox().maxOutputBytes());
 
                 String verdict = classify(r, c.expectedOutput());
@@ -194,13 +194,20 @@ public class JudgeEngine {
         if (r.error() != null) {
             return "SYSTEM_ERROR";
         }
-        if (r.timedOut()) {
-            return "TLE";
-        }
+        // Overflow is checked before the timeout: when output explodes we kill the process
+        // ourselves, so the run also looks "not finished". The cause is the output, not speed.
         if (r.outputOverflow()) {
             return "OLE";
         }
+        if (r.timedOut()) {
+            return "TLE";
+        }
         if (r.exitCode() != 0) {
+            // 137 = 128 + SIGKILL: the container's OOM killer ended it, so the program did
+            // hit the memory ceiling even though it never printed a message of its own.
+            if (r.exitCode() == 137) {
+                return "MLE";
+            }
             return looksLikeOutOfMemory(r.stderr()) ? "MLE" : "RE";
         }
         return normalize(r.stdout()).equals(normalize(expected)) ? "AC" : "WA";

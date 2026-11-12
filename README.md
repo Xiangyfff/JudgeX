@@ -61,10 +61,10 @@
 
 > 先管住一定会发生的事：死循环、输出洪水、内存。
 
-- **超时强杀** — 到点销毁整棵进程树，提交的代码 fork 出子进程也带得走。
+- **超时强杀** — 到点销毁整棵进程树，提交的代码 fork 出子进程也带得走；容器模式给每次执行一个容器名，杀的是容器本身，不是外壳。
 - **输出截断** — stdout / stderr 各一个读取线程，累计超过 64KB 立刻杀进程判 `OLE`，避免子进程堵死在管道上假装超时。
 - **资源与环境保护** — Java、Node 有堆上限；环境变量清空只留 `PATH`，`HOME` 与临时目录指向任务私有目录，跑完即删。
-- **Linux 级隔离兜底** — 切到 Docker 后端后由 namespace、只读根与 `--pids-limit` 兜底；`local` 模式明确只做到进程级，防误伤不防恶意。
+- **两档隔离，都实测过** — `local` 是进程级（超时、输出洪水、误写文件都挡得住，但不挡读文件与联网），`docker` 补齐文件系统、网络、内存三块：`--network none`、只读根、`--pids-limit`、`--memory`。容器镜像由 `docker/runner/Dockerfile` 组装（JDK + Python + Node），`--judgex.sandbox.mode=docker` 即可切换。数据见 [`docs/SANDBOX-TESTS.md`](docs/SANDBOX-TESTS.md)。
 
 ### 📡 看得见的判题过程
 
@@ -184,6 +184,15 @@ backend/src/main/resources/db/migration/V2__add_problem_hint.sql
 
 Redis 与 RocketMQ 都不是必需的。没有 Redis 就少一层加速（限流退回内存、排行榜返回空）；没有 RocketMQ 只是判题从"毫秒级唤醒"退化成"2 秒一次兜底轮询"，通知留在发件箱等 broker 回来。
 
+Docker 用来跑"容器沙箱"这一档：进程级沙箱是默认值，容器沙箱要多一个镜像。
+
+```bash
+# 判题镜像：JDK 17 + Python 3.11 + Node 20，约 772 MB
+docker build -t judgex-runner:latest docker/runner
+# 之后用容器沙箱启动后端
+java -jar target/judgex-backend-1.0.0.jar --judgex.sandbox.mode=docker
+```
+
 ```bash
 # Redis
 redis-server --port 6379
@@ -269,8 +278,9 @@ JudgeX
 ## 已知限制
 
 - `local` 沙箱是进程级隔离：防得住超时、输出洪水与误写文件，防不住读内存、扫内网、提权。生产环境应切到 `docker`。
-- 沙箱的行为有实测数据，见 [`docs/SANDBOX-TESTS.md`](docs/SANDBOX-TESTS.md)：7 种判定各跑了一遍，边界值（63000 字节输出、1.8 秒睡眠、200 MB 堆）不会误判；同时记录了本机模式的真实短板——提交的代码能读到 `C:\Windows\win.ini`、能连上本机 3306。已修掉子进程逃逸（改为杀进程树）、javac 中文乱码（强制英文诊断）、Python 与 Node 没有编译错误判定（加语法预检）。
-- local 模式下只有 Java 与 Node 能真正压住堆内存（堆上限取自题目配置，`-Xmx` / `--max-old-space-size`）；Python、C++ 在 Windows 上没有等价的命令旋钮，要硬限制得用 `docker` 的 `--memory`。内存峰值拿不到准确值，页面显示 `—` 而不是编造数字；`MLE` 只在运行时自己报 OOM 时给出。
+- 沙箱的行为有实测数据，见 [`docs/SANDBOX-TESTS.md`](docs/SANDBOX-TESTS.md)：两档沙箱同一组用例各跑一遍。`local` 模式的真实短板是——提交的代码能读到 `C:\Windows\win.ini`、能连上本机 3306；`docker` 模式下这两项都被挡住（RE），往根目录写文件报 `Read-only file system`，Python 撑爆 256 MB 被 OOM kill 判 `MLE`。代价是每条用例多 300～450 毫秒容器启动，5 个用例的提交从 0.7 秒变成 3～5 秒。
+- 容器镜像 `judgex-runner:latest`（约 772 MB）由 [`docker/runner/Dockerfile`](docker/runner/Dockerfile) 用三份官方镜像多阶段拷贝而成（JDK 17 + Python 3.11 + Node 20）。镜像里**没有 g++**，容器模式下 C++ 提交会 CE；镜像默认以 root 运行，靠 `--cap-drop ALL` + `no-new-privileges` 收窄，尚未配置 seccomp 与非 root 用户。
+- local 模式下只有 Java 与 Node 能真正压住堆内存（堆上限取自题目配置，`-Xmx` / `--max-old-space-size`）；Python、C++ 在 Windows 上没有等价的命令旋钮，要硬限制得用 `docker` 的 `--memory`。两种模式都拿不到准确的内存峰值，页面显示 `—` 而不是编造数字；`MLE` 靠运行时自报 OOM（本机）或容器退出码 137（容器）。
 - 调度靠"延时闹钟 + 兜底轮询"，不靠扫表。多节点下 CAS 仍然安全，但每个节点都会做自己的安全扫描，重复回收由条件更新兜住；租约闹钟由认领任务的 Worker 自己发，没有做全局对账。
 - 本机 RocketMQ 4.9.7 实测（加了发送/接收时间戳后逐段量）：派活消息**从发出到调度线程被叫醒 5～10 毫秒**（发送 3ms + broker 到消费端 5ms + 抢到任务 6ms），空闲 45 秒后第一条同样如此；提交到出结果 0.7～0.8 秒，这段时间基本都花在判题本身（5 个用例 × 约 130 毫秒进程启动），不是消息延迟。冷启动后约 10 秒内客户端还在建连，这期间的派活消息会丢，由 2 秒兜底轮询接住（首次提交约 2.7 秒出结果）；把租约强制置过期后，延时闹钟 4 秒内回收成功。
 - 限流按用户维度，多实例依赖 Redis 共享配额；内存回退版只在单机准确。

@@ -35,10 +35,22 @@ public class LanguageRegistry {
             String runtime,
             List<String> compileCommand,
             List<String> runCommand,
+            List<String> containerCompileCommand,
+            List<String> containerRunCommand,
             String heapOption
     ) {
         public boolean needsCompile() {
-            return compileCommand != null && !compileCommand.isEmpty();
+            return (compileCommand != null && !compileCommand.isEmpty())
+                    || (containerCompileCommand != null && !containerCompileCommand.isEmpty());
+        }
+
+        /**
+         * Host commands are absolute paths ("C:\...\javac.exe"); container commands are
+         * plain names resolved through the image's PATH ("javac"). The same language is
+         * described by both, and the judge picks depending on where it will run.
+         */
+        public List<String> compileCommand(boolean container) {
+            return container ? containerCompileCommand : compileCommand;
         }
 
         /**
@@ -49,14 +61,15 @@ public class LanguageRegistry {
          * without job objects. The container sandbox enforces the same number for every
          * language through {@code --memory}.
          */
-        public List<String> runCommand(int memoryMb) {
+        public List<String> runCommand(int memoryMb, boolean container) {
+            List<String> base = container ? containerRunCommand : runCommand;
             if (heapOption == null || memoryMb <= 0) {
-                return runCommand;
+                return base;
             }
-            List<String> cmd = new ArrayList<>(runCommand.size() + 1);
-            cmd.add(runCommand.get(0));
+            List<String> cmd = new ArrayList<>(base.size() + 1);
+            cmd.add(base.get(0));
             cmd.add(heapOption.formatted(memoryMb));
-            cmd.addAll(runCommand.subList(1, runCommand.size()));
+            cmd.addAll(base.subList(1, base.size()));
             return cmd;
         }
     }
@@ -71,6 +84,8 @@ public class LanguageRegistry {
                     "JDK " + System.getProperty("java.version"),
                     List.of(javac, "-encoding", "UTF-8", "-J-Duser.language=en", "-J-Duser.country=US", "Main.java"),
                     List.of(java, "-Xss64m", "-XX:+UseSerialGC", "-cp", ".", "Main"),
+                    List.of("javac", "-encoding", "UTF-8", "-J-Duser.language=en", "-J-Duser.country=US", "Main.java"),
+                    List.of("java", "-Xss64m", "-XX:+UseSerialGC", "-cp", ".", "Main"),
                     "-Xmx%dm"));
         }
 
@@ -80,7 +95,10 @@ public class LanguageRegistry {
             if (version != null) {
                 available.put("python", new Language("python", "Python 3", "main.py", version,
                         List.of(python, "-c", "import ast;ast.parse(open('main.py',encoding='utf-8').read())"),
-                        List.of(python, "-I", "main.py"), null));
+                        List.of(python, "-I", "main.py"),
+                        List.of("python3", "-c", "import ast;ast.parse(open('main.py',encoding='utf-8').read())"),
+                        List.of("python3", "-I", "main.py"),
+                        null));
             }
         }
 
@@ -91,7 +109,9 @@ public class LanguageRegistry {
             String version = version(node);
             if (version != null) {
                 available.put("javascript", new Language("javascript", "JavaScript (Node)", "main.js", version,
-                        List.of(node, "--check", "main.js"), List.of(node, "main.js"), "--max-old-space-size=%d"));
+                        List.of(node, "--check", "main.js"), List.of(node, "main.js"),
+                        List.of("node", "--check", "main.js"), List.of("node", "main.js"),
+                        "--max-old-space-size=%d"));
             }
         }
 
@@ -104,7 +124,10 @@ public class LanguageRegistry {
             if (version != null) {
                 available.put("cpp", new Language("cpp", "C++17", "main.cpp", version,
                         List.of(gpp, "-O2", "-std=c++17", "-o", "main.exe", "main.cpp"),
-                        List.of("./main.exe"), null));
+                        List.of("./main.exe"),
+                        List.of("g++", "-O2", "-std=c++17", "-o", "main", "main.cpp"),
+                        List.of("./main"),
+                        null));
             }
         }
 

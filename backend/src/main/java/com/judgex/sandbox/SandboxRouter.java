@@ -51,6 +51,11 @@ public class SandboxRouter implements SandboxRunner {
     }
 
     @Override
+    public boolean container() {
+        return active.container();
+    }
+
+    @Override
     public ExecResult exec(List<String> command, Path workDir, String stdin, int timeoutMs,
                            int memoryMb, int maxOutputBytes) {
         return active.exec(command, workDir, stdin, timeoutMs, memoryMb, maxOutputBytes);
