@@ -69,7 +69,7 @@ public class LanguageRegistry {
         if (javac != null && java != null) {
             available.put("java", new Language("java", "Java 17", "Main.java",
                     "JDK " + System.getProperty("java.version"),
-                    List.of(javac, "-encoding", "UTF-8", "Main.java"),
+                    List.of(javac, "-encoding", "UTF-8", "-J-Duser.language=en", "-J-Duser.country=US", "Main.java"),
                     List.of(java, "-Xss64m", "-XX:+UseSerialGC", "-cp", ".", "Main"),
                     "-Xmx%dm"));
         }
@@ -79,7 +79,8 @@ public class LanguageRegistry {
             String version = version(python);
             if (version != null) {
                 available.put("python", new Language("python", "Python 3", "main.py", version,
-                        List.of(), List.of(python, "-I", "main.py"), null));
+                        List.of(python, "-c", "import ast;ast.parse(open('main.py',encoding='utf-8').read())"),
+                        List.of(python, "-I", "main.py"), null));
             }
         }
 
@@ -90,7 +91,7 @@ public class LanguageRegistry {
             String version = version(node);
             if (version != null) {
                 available.put("javascript", new Language("javascript", "JavaScript (Node)", "main.js", version,
-                        List.of(), List.of(node, "main.js"), "--max-old-space-size=%d"));
+                        List.of(node, "--check", "main.js"), List.of(node, "main.js"), "--max-old-space-size=%d"));
             }
         }
 

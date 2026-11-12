@@ -12,6 +12,8 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -54,6 +56,28 @@ public class LocalSandbox implements SandboxRunner {
         }
 
         AtomicBoolean overflow = new AtomicBoolean(false);
+        AtomicBoolean done = new AtomicBoolean(false);
+        Set<ProcessHandle> tracked = ConcurrentHashMap.newKeySet();
+
+        // Submitted code can spawn children that outlive the parent; on Windows
+        // killing the parent leaves them running and holding the pipe open, which
+        // both burns the timeout budget and keeps the work dir locked. Sample the
+        // tree while it is alive so it can be reaped afterwards.
+        Thread reaper = new Thread(() -> {
+            while (!done.get()) {
+                process.descendants().forEach(tracked::add);
+                try {
+                    Thread.sleep(100);
+                } catch (InterruptedException e) {
+                    return;
+                }
+            }
+        }, "sandbox-reaper");
+        reaper.setDaemon(true);
+        reaper.start();
+
+        Runnable killer = () -> killTree(process, tracked);
+
         Thread stdinWriter = new Thread(() -> {
             try (var os = process.getOutputStream()) {
                 if (stdin != null && !stdin.isEmpty()) {
@@ -67,8 +91,8 @@ public class LocalSandbox implements SandboxRunner {
 
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         ByteArrayOutputStream err = new ByteArrayOutputStream();
-        Thread outReader = limitReader(process.getInputStream(), out, maxOutputBytes, overflow, process, "stdout");
-        Thread errReader = limitReader(process.getErrorStream(), err, maxOutputBytes, overflow, process, "stderr");
+        Thread outReader = limitReader(process.getInputStream(), out, maxOutputBytes, overflow, killer, process, "stdout");
+        Thread errReader = limitReader(process.getErrorStream(), err, maxOutputBytes, overflow, killer, process, "stderr");
 
         stdinWriter.start();
         outReader.start();
@@ -82,9 +106,12 @@ public class LocalSandbox implements SandboxRunner {
             finished = false;
         }
 
+        done.set(true);
+        reaper.interrupt();
         if (!finished) {
-            process.destroyForcibly();
+            log.warn("timed out after {} ms, killing process tree of pid {}", timeoutMs, process.pid());
         }
+        killer.run();
         try {
             process.waitFor(3, TimeUnit.SECONDS);
         } catch (InterruptedException e) {
@@ -122,7 +149,7 @@ public class LocalSandbox implements SandboxRunner {
     }
 
     private Thread limitReader(InputStream in, ByteArrayOutputStream sink, int max,
-                               AtomicBoolean overflow, Process process, String label) {
+                               AtomicBoolean overflow, Runnable killer, Process process, String label) {
         Thread t = new Thread(() -> {
             byte[] buf = new byte[8192];
             long total = 0;
@@ -132,7 +159,7 @@ public class LocalSandbox implements SandboxRunner {
                     if (total >= max) {
                         if (overflow.compareAndSet(false, true)) {
                             log.warn("{} exceeded {} bytes, killing pid {}", label, max, process.pid());
-                            process.destroyForcibly();
+                            killer.run();
                         }
                         total += n;
                         continue;
@@ -147,6 +174,12 @@ public class LocalSandbox implements SandboxRunner {
         }, "sandbox-" + label);
         t.setDaemon(true);
         return t;
+    }
+
+    private void killTree(Process process, Set<ProcessHandle> tracked) {
+        tracked.forEach(ProcessHandle::destroyForcibly);
+        process.descendants().forEach(ProcessHandle::destroyForcibly);
+        process.destroyForcibly();
     }
 
     private void joinQuietly(Thread t) {

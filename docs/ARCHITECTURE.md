@@ -107,7 +107,7 @@ Worker 循环（事件驱动，2s 兜底）:
 
 | 威胁 | `local` 模式 | `docker` 模式（已实现，需 daemon） |
 | --- | --- | --- |
-| 死循环 / 睡死 | `waitFor(timeout)` + `destroyForcibly()` 杀进程树 | 容器 `--stop-timeout` + `docker kill` |
+| 死循环 / 睡死 | `waitFor(timeout)` + 杀整个进程树（执行期间采样 `descendants()`） | 容器 `--stop-timeout` + `docker kill` |
 | 内存炸弹 | Java/Node 的堆上限取自题目配置；Python/C++ 无法在 Windows 上限制 | `--memory` + `--memory-swap` |
 | fork bomb | 无法在 Windows 上限制（Linux 可 `ulimit -u`） | `--pids-limit` |
 | 读宿主文件 | 工作目录隔离，但**不阻止**读绝对路径 | 只读根 + 仅挂载工作目录 |
@@ -117,6 +117,8 @@ Worker 循环（事件驱动，2s 兜底）:
 | 输出洪水 | 读取线程 64KB 截断，标记 `OLE` | 同左（管道在宿主侧截断） |
 
 **这是一份诚实的边界表**：`local` 模式适合"自己的学生写自己的作业"，不适合公网。真正的隔离必须靠内核能力，而 Windows 上没有 cgroup/namespace，所以 `DockerSandbox` 按同一接口实现，切换只需 `JUDGEX_SANDBOX=docker`。
+
+表里那几条「不阻止」不是推测，是实测：提交的代码读到了 `C:\Windows\win.ini`、连上了本机 3306、起的子进程在父进程退出后还活了 25 秒。完整数据（7 种判定、边界值、隔离性反向测试、并发与清理）见 [`SANDBOX-TESTS.md`](SANDBOX-TESTS.md)。其中「子进程逃逸」已经修掉：执行期间每 100 毫秒采样一次进程树，结束时整棵杀掉，单用例从 4.35 秒回到 0.42 秒，工作目录也不再残留。
 
 代码里的取舍：**先做"一定会发生"的防护（超时、内存、输出），再做"可能发生"的防护（文件、网络、提权）**。前者不做，平台五分钟就被一个 `while(true)` 打死；后者不做，是安全债，要在部署前还。
 
