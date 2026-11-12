@@ -3,9 +3,12 @@ package com.judgex.web;
 import com.judgex.auth.AuthFilter;
 import com.judgex.auth.UserPrincipal;
 import com.judgex.config.JudgexProps;
+import com.judgex.mq.JudgeLeaseConsumer;
 import com.judgex.mq.JudgeResultConsumer;
+import com.judgex.mq.JudgeTaskConsumer;
 import com.judgex.mq.MqProducer;
 import com.judgex.mq.OutboxMapper;
+import com.judgex.mq.TaskDispatch;
 import com.judgex.redis.LeaderboardService;
 import com.judgex.redis.PresenceService;
 import com.judgex.redis.RedisGate;
@@ -35,11 +38,16 @@ public class DashboardController {
     private final OutboxMapper outbox;
     private final MqProducer mqProducer;
     private final JudgeResultConsumer mqConsumer;
+    private final JudgeTaskConsumer dispatchConsumer;
+    private final JudgeLeaseConsumer leaseConsumer;
+    private final TaskDispatch dispatch;
 
     public DashboardController(MetricsService metrics, LanguageRegistry languages, ProgressHub hub,
                                JudgexProps props, RedisGate redis, PresenceService presence,
                                LeaderboardService leaderboard, OutboxMapper outbox,
-                               MqProducer mqProducer, JudgeResultConsumer mqConsumer) {
+                               MqProducer mqProducer, JudgeResultConsumer mqConsumer,
+                               JudgeTaskConsumer dispatchConsumer, JudgeLeaseConsumer leaseConsumer,
+                               TaskDispatch dispatch) {
         this.metrics = metrics;
         this.languages = languages;
         this.hub = hub;
@@ -50,6 +58,9 @@ public class DashboardController {
         this.outbox = outbox;
         this.mqProducer = mqProducer;
         this.mqConsumer = mqConsumer;
+        this.dispatchConsumer = dispatchConsumer;
+        this.leaseConsumer = leaseConsumer;
+        this.dispatch = dispatch;
     }
 
     @GetMapping("/health")
@@ -81,12 +92,17 @@ public class DashboardController {
                 props.mq().enabled(),
                 mqProducer.status(),
                 mqConsumer.status(),
+                // Two independent "ping" consumers; DOWN here only means the fast path is off.
+                dispatchConsumer.status() + "/" + leaseConsumer.status(),
                 props.mq().topic(),
                 counts.getOrDefault("pending", 0),
                 counts.getOrDefault("sending", 0),
                 counts.getOrDefault("sent", 0),
                 counts.getOrDefault("dead", 0),
-                outbox.lastError());
+                outbox.lastError(),
+                dispatch.sentPings(),
+                dispatch.sentAlarms(),
+                dispatch.dropped());
     }
 
     @GetMapping("/notifications")

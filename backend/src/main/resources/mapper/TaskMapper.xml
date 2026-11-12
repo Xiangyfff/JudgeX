@@ -32,6 +32,12 @@
         WHERE id = #{taskId}
     </select>
 
+    <select id="selectState" resultType="com.judgex.repo.TaskMapper$TaskState">
+        SELECT id, submission_id, attempts, status, lease_expires_at
+        FROM judge_tasks
+        WHERE id = #{taskId}
+    </select>
+
     <select id="selectExpiredLeases" resultType="com.judgex.repo.TaskMapper$Lease">
         SELECT id, submission_id, attempts
         FROM judge_tasks

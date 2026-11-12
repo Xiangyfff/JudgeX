@@ -56,7 +56,11 @@ judgex:
     enabled: ${JUDGEX_WORKER_ENABLED:true}
     heartbeat-interval-ms: 3000
     lease-seconds: 45
-    poll-interval-ms: 250
+    # The dispatcher sleeps until a "task queued" message arrives. This is only the
+    # fallback cadence for when the broker is unreachable (every task then waits <= this).
+    idle-poll-ms: ${JUDGEX_IDLE_POLL_MS:2000}
+    # Third line of defence: leases whose alarm message was lost are still reclaimed here.
+    safety-sweep-ms: 60000
   sandbox:
     # local | docker | auto
     mode: ${JUDGEX_SANDBOX:local}
@@ -77,9 +81,17 @@ judgex:
     # then a relay delivers the row to RocketMQ. Broker down => rows simply wait in the table.
     enabled: ${JUDGEX_MQ_ENABLED:true}
     namesrv: ${JUDGEX_MQ_NAMESRV:127.0.0.1:19877}
+    # Three jobs, three topics. Only `topic` is lossless (it is fed by the outbox);
+    # `task-topic` and `lease-topic` are pings - losing one costs seconds, never a verdict.
     topic: ${JUDGEX_MQ_TOPIC:judgex-result}
+    task-topic: ${JUDGEX_MQ_TASK_TOPIC:judgex-task}
+    lease-topic: ${JUDGEX_MQ_LEASE_TOPIC:judgex-lease}
     producer-group: judgex-producer
     consumer-group: judgex-notify
+    dispatch-group: judgex-dispatch
+    lease-group: judgex-lease-guard
+    # 4 = 30s. Lease is 45s, so the alarm fires early and re-arms itself for the remainder.
+    lease-delay-level: 4
     max-attempts: 6
 
 logging:

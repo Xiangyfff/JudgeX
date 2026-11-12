@@ -51,10 +51,11 @@
 
 > 提交即落库，任务靠一条 CAS 抢，跑一半的机器挂了有人捡回来。
 
-- **数据库即队列** — 提交记录与判题任务在同一事务写入，调度器每 250ms 拉一批，不额外引入消息中间件。
+- **数据库即队列** — 提交记录与判题任务在同一事务写入，队列就是 `judge_tasks` 这张表，不额外引入队列中间件。
+- **MQ 只提醒，不分配** — 入队后发一条"有活了"，Worker 醒来仍然要靠 CAS 去抢；消息丢了有 2 秒兜底轮询，broker 整个挂掉判题也照常跑。
 - **CAS 认领** — 用一次条件更新把任务从 `QUEUED` 改成 `ASSIGNED`，affected rows 为 1 的 Worker 拿走任务，多实例部署也安全。
-- **租约与看门狗** — 心跳每 3 秒续一次 45 秒租约；看门狗每 5 秒扫过期任务，崩溃节点上的任务 50 秒内被重新投递，连续 3 次失败收敛为系统错误。
-- **三层幂等** — 请求幂等键拦重复点击，CAS 拦重复派发，结果表在（提交，用例序号）上的唯一索引拦"任务回收后迟到的结果"。
+- **租约 + 延时闹钟** — 认领时定一个 30 秒的闹钟（租约 45 秒），闹钟回来发现租约还活着就按剩余时间续一个；Worker 真挂了，一个闹钟周期内就被捡回来，60 秒一次的全表扫描只当兜底。
+- **三层幂等** — 请求幂等键拦重复点击，CAS 拦重复派发，终态守卫（`WHERE status <> 'DONE'`）拦"任务回收后迟到的结果"。
 
 ### 🔒 分层沙箱
 
@@ -73,14 +74,15 @@
 - **快照 + 增量** — 断线重连先收当前全量结果再收增量，刷新页面不会永久丢一段。
 - **运行指标** — 队列深度每 5 秒采样、节点心跳、端到端 P50、语言运行时探测，都落在监控台。
 
-### 📤 不丢的事件投递
+### 📤 三种消息，一条纪律
 
-> 结果落库和事件发出，必须是同一个事实。
+> 消息只负责提醒，真相永远在数据库里。
 
-- **事务性发件箱** — 终态与 outbox 行同事务提交，`event_key` 唯一索引兜底；Relay 每 400ms 领取到期行投递 RocketMQ。
+- **结果通知不能丢** — 终态与 outbox 行同事务提交，`event_key` 唯一索引兜底；Relay 每 400ms 领取到期行投递 RocketMQ。
+- **派活和闹钟可以丢** — 这两类只做"叫醒"和"到点回来看一眼"：发送是异步的，broker 连不上就记一个丢包计数，绝不拖慢提交；消息没了有兜底轮询和安全扫描。
 - **退避与死信** — 失败按 1s → 2s → 4s 退避（30s 封顶），6 次仍失败进死信表，留给人看。
 - **消费幂等** — 通知表在提交号上有唯一索引，重复投递不会多出一条。
-- **故障演练** — 停掉 broker 提交，判题照常 AC、待投递变 1；重启 broker 不到半分钟自动追平。
+- **故障演练** — 本机全程关掉 broker：提交到 AC 从 0.6 秒退化到 2.5 秒（一个兜底周期），判题结果不受影响；手动催单接口 `POST /api/admin/judge/wake` 777ms 出结果。
 
 ## 系统流程
 
@@ -117,7 +119,7 @@ sequenceDiagram
 | API | Java 17、Spring Boot 3.5.16、MyBatis 3.5 | 鉴权、提交、调度与 REST API |
 | 执行 | ProcessBuilder、Docker | 编译运行与进程级隔离，两套沙箱共用一套接口 |
 | 数据 | MySQL 8.0、Flyway 11 | 题目、提交、任务、租约与发件箱；表结构由版本化脚本演进 |
-| 异步与缓存 | RocketMQ 5.3.1、Redis 7 | 结果事件投递；限流、节点存活与排行榜 |
+| 异步与缓存 | RocketMQ 5.3.1、Redis 7 | 结果通知、派活唤醒与租约闹钟；限流、节点存活与排行榜 |
 | 观测 | Micrometer 风格指标、SSE | 队列深度、心跳、吞吐与端到端耗时 |
 
 ## 本地运行
@@ -180,13 +182,14 @@ backend/src/main/resources/db/migration/V2__add_problem_hint.sql
 
 ### 4. 可选中间件
 
-Redis 与 RocketMQ 都不是必需的，不启动只会少一层加速或事件投递，判题链路不受影响。
+Redis 与 RocketMQ 都不是必需的。没有 Redis 就少一层加速（限流退回内存、排行榜返回空）；没有 RocketMQ 只是判题从"毫秒级唤醒"退化成"2 秒一次兜底轮询"，通知留在发件箱等 broker 回来。
 
 ```bash
 # Redis
 redis-server --port 6379
 
 # RocketMQ（自建 nameserver + broker，端口 19877 / 10913）
+# 三个 topic：judgex-result（结果通知，走发件箱）、judgex-task（派活提醒）、judgex-lease（租约闹钟）
 docker network create judgex-mq
 docker run -d --name judgex-mq-namesrv --network judgex-mq -p 19877:9876 apache/rocketmq:5.3.1 sh mqnamesrv
 docker run -d --name judgex-mq-broker --network judgex-mq -p 10913:10913 \
@@ -217,7 +220,7 @@ java -jar target/judgex-backend-1.0.0.jar
 | 启动报 `Flyway ... checksum mismatch` | 改到了已应用的脚本；恢复原文件，改表请新增 `Vn__` 脚本 |
 | 端口被占用 | 设置 `JUDGEX_PORT`，或先释放 18900 |
 | 控制台告警 Redis 连接失败 | 属正常降级，限流走内存、排行榜返回空；需要时再启动 Redis |
-| 监控台消息通道显示 DEGRADED | broker 不可用，事件留在发件箱；broker 恢复后自动追平 |
+| 监控台消息通道显示 DEGRADED | broker 不可用：通知留在发件箱，派活/闹钟退回兜底轮询，判题变慢但不会出错 |
 | 打包报 `Unable to rename ... jar.original` | 先停掉正在运行的 jar，Windows 文件占用会导致重命名失败 |
 | 沙箱里创建子进程报 `CreatePipe error=5` | 权限受限，需要以具备进程创建权限的方式运行后端 |
 
@@ -233,7 +236,7 @@ JudgeX
 │       ├── sandbox/         # local / docker 两套实现
 │       ├── service/         # 判题引擎、调度、SSE、发件箱
 │       ├── redis/           # 限流、存活键、排行榜
-│       └── mq/              # producer、relay、消费端
+│       └── mq/              # producer、发件箱、派活与租约闹钟、三个消费端
 │   └── src/main/resources/
 │       ├── mapper/          # Mapper XML，SQL 都在这里
 │       └── db/migration/    # Flyway 版本化建表脚本
@@ -266,7 +269,8 @@ JudgeX
 
 - `local` 沙箱是进程级隔离：防得住超时、输出洪水与误写文件，防不住读内存、扫内网、提权。生产环境应切到 `docker`。
 - local 模式下只有 Java 与 Node 能真正压住堆内存（堆上限取自题目配置，`-Xmx` / `--max-old-space-size`）；Python、C++ 在 Windows 上没有等价的命令旋钮，要硬限制得用 `docker` 的 `--memory`。内存峰值拿不到准确值，页面显示 `—` 而不是编造数字；`MLE` 只在运行时自己报 OOM 时给出。
-- 调度为单节点扫表。多节点下 CAS 仍然安全，但回收扫描会重复，替换为 `SKIP LOCKED` 或独立租约表更合适。
+- 调度靠"延时闹钟 + 兜底轮询"，不靠扫表。多节点下 CAS 仍然安全，但每个节点都会做自己的安全扫描，重复回收由条件更新兜住；租约闹钟由认领任务的 Worker 自己发，没有做全局对账。
+- 真实 broker 下的毫秒级唤醒与延时精度没有实测数字：这台开发机没有 RocketMQ，只验证了"broker 全挂时退化为轮询、结果依然正确"这条路径。
 - 限流按用户维度，多实例依赖 Redis 共享配额；内存回退版只在单机准确。
 - 表结构由 Flyway 管：脚本一旦执行就不能改，改表要新增 `Vn__` 脚本。迁移到 MySQL 后接口多了一跳网络往返，上面的压测数字没有重跑。
 - 判题的时限与内存现在来自题目配置：Java 在时限上额外给 2 秒 JVM 启动宽限，编译时间不计入单用例时限。

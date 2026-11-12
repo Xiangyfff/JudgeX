@@ -77,12 +77,27 @@ public class MqProducer {
     }
 
     public void send(String topic, String key, String payload) throws Exception {
+        send(topic, key, payload, 0);
+    }
+
+    /**
+     * Delay-level send. Used for lease alarms: the message arrives when the lease should
+     * have expired, and the receiver decides from the database whether it still matters.
+     */
+    public void sendDelay(String topic, String key, String payload, int delayLevel) throws Exception {
+        send(topic, key, payload, delayLevel);
+    }
+
+    private void send(String topic, String key, String payload, int delayLevel) throws Exception {
         DefaultMQProducer p = get();
         if (p == null) {
             throw new IllegalStateException("rocketmq producer unavailable: " + lastError);
         }
         Message msg = new Message(topic, payload.getBytes(StandardCharsets.UTF_8));
         msg.setKeys(key);
+        if (delayLevel > 0) {
+            msg.setDelayTimeLevel(delayLevel);
+        }
         try {
             p.send(msg);
             if (!"UP".equals(state)) {

@@ -19,6 +19,10 @@ public interface TaskMapper {
     record Lease(long taskId, long submissionId, int attempts) {
     }
 
+    /** Everything a lease alarm needs to decide whether it is still relevant. */
+    record TaskState(long taskId, long submissionId, int attempts, String status, LocalDateTime leaseExpiresAt) {
+    }
+
     int insertEnqueue(@Param("submissionId") long submissionId);
 
     List<Long> selectCandidates(@Param("limit") int limit);
@@ -29,6 +33,8 @@ public interface TaskMapper {
               @Param("now") LocalDateTime now);
 
     ClaimedTask selectClaimed(@Param("taskId") long taskId);
+
+    TaskState selectState(@Param("taskId") long taskId);
 
     List<Lease> selectExpiredLeases(@Param("now") LocalDateTime now, @Param("limit") int limit);
 

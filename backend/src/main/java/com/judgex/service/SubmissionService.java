@@ -3,6 +3,7 @@ package com.judgex.service;
 import com.judgex.auth.UserPrincipal;
 import com.judgex.common.ApiException;
 import com.judgex.config.JudgexProps;
+import com.judgex.mq.TaskDispatch;
 import com.judgex.repo.ProblemMapper;
 import com.judgex.repo.SubmissionMapper;
 import com.judgex.repo.TaskMapper;
@@ -32,10 +33,11 @@ public class SubmissionService {
     private final JudgexProps props;
     private final ProgressHub hub;
     private final TokenBucketLimiter limiter;
+    private final TaskDispatch dispatch;
 
     public SubmissionService(SubmissionMapper submissions, ProblemMapper problems, TaskMapper tasks,
                              LanguageRegistry languages, JudgexProps props, ProgressHub hub,
-                             TokenBucketLimiter limiter) {
+                             TokenBucketLimiter limiter, TaskDispatch dispatch) {
         this.submissions = submissions;
         this.problems = problems;
         this.tasks = tasks;
@@ -43,6 +45,7 @@ public class SubmissionService {
         this.props = props;
         this.hub = hub;
         this.limiter = limiter;
+        this.dispatch = dispatch;
     }
 
     @Transactional
@@ -78,6 +81,9 @@ public class SubmissionService {
         long id = submissions.insert(user.id(), problem.id(), req.language(), req.sourceCode(),
                 idemKey == null || idemKey.isBlank() ? null : idemKey);
         tasks.enqueue(id);
+        // Nudge the cluster: the row is committed with this transaction, so the ping goes out
+        // after commit. A lost ping only costs one fallback poll — the task row is the truth.
+        dispatch.taskQueued(id);
         Dto.SubmissionRow row = submissions.find(id).orElseThrow();
         hub.publish(id, "status", Map.of("status", "QUEUED", "submissionId", id));
         log.info("submission {} accepted for user {} problem {}", id, user.id(), problem.slug());

@@ -96,8 +96,9 @@ public final class Dto {
 
     /** Outbox depth + broker health, surfaced on the operations dashboard. */
     public record MqStats(
-            boolean enabled, String broker, String consumer, String topic,
-            int pending, int sending, int sent, int dead, String lastError
+            boolean enabled, String broker, String consumer, String dispatch, String topic,
+            int pending, int sending, int sent, int dead, String lastError,
+            long pings, long alarms, long droppedPings
     ) {
     }
 
