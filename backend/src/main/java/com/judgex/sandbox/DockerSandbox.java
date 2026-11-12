@@ -85,11 +85,27 @@ public class DockerSandbox implements SandboxRunner {
                     os.write(stdin.getBytes(StandardCharsets.UTF_8));
                 }
             }
+            // Drain stderr on its own thread: reading stdout to EOF first deadlocks the moment
+            // the child fills the stderr pipe buffer, and the timeout would then fire on a
+            // program that was never actually slow.
+            StringBuilder errBuf = new StringBuilder();
+            Thread errReader = new Thread(() -> {
+                String text = readCapped(p.getErrorStream(), maxOutputBytes);
+                synchronized (errBuf) {
+                    errBuf.append(text);
+                }
+            }, "docker-stderr");
+            errReader.setDaemon(true);
+            errReader.start();
             String out = readCapped(p.getInputStream(), maxOutputBytes);
-            String err = readCapped(p.getErrorStream(), maxOutputBytes);
             boolean finished = p.waitFor(timeoutMs, TimeUnit.MILLISECONDS);
             if (!finished) {
                 p.destroyForcibly();
+            }
+            errReader.join(2000);
+            String err;
+            synchronized (errBuf) {
+                err = errBuf.toString();
             }
             long elapsed = (System.nanoTime() - start) / 1_000_000;
             return new ExecResult(finished ? p.exitValue() : -1, out, err, elapsed, 0, !finished, false, null);

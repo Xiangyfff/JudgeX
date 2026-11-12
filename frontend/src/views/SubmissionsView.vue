@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import AppShell from '../components/AppShell.vue'
 import VerdictPill from '../components/VerdictPill.vue'
-import { api, type SubmissionDetail, type SubmissionRow } from '../lib/api'
+import { api, session, type SubmissionDetail, type SubmissionRow } from '../lib/api'
 import { fmtBytes, fmtDuration, fmtClock, timeAgo } from '../lib/format'
 import { toast } from '../lib/toast'
 
@@ -30,7 +30,14 @@ async function load(silent = false) {
   }
 }
 
-async function openDetail(id: number) {
+async function openDetail(id: number, ownerId?: number) {
+  // Source code is the author's. Keep the "全部" list browsable without opening
+  // someone else's code (the server enforces the same rule with a 403).
+  const me = session.user
+  if (ownerId != null && me && ownerId !== me.id && me.role !== 'ADMIN') {
+    toast('只能查看自己的提交详情，别人的源码不可见', 'info')
+    return
+  }
   detailLoading.value = true
   open.value = true
   try {
@@ -93,7 +100,7 @@ onBeforeUnmount(() => {
           </tr>
         </thead>
         <tbody>
-          <tr v-for="r in rows" :key="r.id" @click="openDetail(r.id)">
+          <tr v-for="r in rows" :key="r.id" @click="openDetail(r.id, r.userId)">
             <td class="mono muted">{{ r.id }}</td>
             <td><VerdictPill :verdict="r.verdict" :status="r.status" /></td>
             <td class="strong">

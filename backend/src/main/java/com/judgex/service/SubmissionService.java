@@ -88,8 +88,15 @@ public class SubmissionService {
         limiter.acquire(userId, props.limits().submitRatePerMinute());
     }
 
-    public Dto.SubmissionDetail detail(long id) {
+    /**
+     * Source code and per-case output belong to the author. Everyone else, except an admin,
+     * gets a 403 — the id is sequential, so "logged in" is not an authorisation.
+     */
+    public Dto.SubmissionDetail detail(long id, UserPrincipal viewer) {
         Dto.SubmissionRow row = submissions.find(id).orElseThrow(() -> ApiException.notFound("submission"));
+        if (row.userId() != viewer.id() && !viewer.isAdmin()) {
+            throw ApiException.forbidden("this submission belongs to another user");
+        }
         return new Dto.SubmissionDetail(row, submissions.source(id),
                 submissions.compileOutput(id), submissions.results(id));
     }

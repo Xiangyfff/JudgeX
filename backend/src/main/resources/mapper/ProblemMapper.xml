@@ -62,10 +62,17 @@
     </select>
 
     <select id="judgeCases" resultType="com.judgex.repo.ProblemMapper$JudgeCase">
-        SELECT id, ordinal, input, expected_output, points
-        FROM test_cases
-        WHERE problem_id = #{problemId}
-        ORDER BY ordinal
+        SELECT tc.id,
+               tc.ordinal,
+               tc.input,
+               tc.expected_output,
+               tc.points,
+               p.time_limit_ms,
+               p.memory_limit_mb
+        FROM test_cases tc
+        JOIN problems p ON p.id = tc.problem_id
+        WHERE tc.problem_id = #{problemId}
+        ORDER BY tc.ordinal
     </select>
 
     <insert id="insertRow" useGeneratedKeys="true" keyProperty="id">

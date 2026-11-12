@@ -106,12 +106,17 @@ public interface SubmissionMapper {
         return selectCompileOutput(id);
     }
 
-    default void markRunning(long id) {
-        markRunningRow(id, LocalDateTime.now());
+    /** @return 0 when the submission is already terminal, i.e. this run is a replay. */
+    default int markRunning(long id) {
+        return markRunningRow(id, LocalDateTime.now());
     }
 
-    default void finish(long id, String status, String verdict, int score, String compileOutput, long totalTimeMs) {
-        finishRow(id, status, verdict, score, compileOutput, totalTimeMs, LocalDateTime.now());
+    /**
+     * @return rows written: 0 means the submission was already terminal, i.e. this verdict is
+     *         late (replayed task or expired lease) and must not overwrite what the user saw.
+     */
+    default int finish(long id, String status, String verdict, int score, String compileOutput, long totalTimeMs) {
+        return finishRow(id, status, verdict, score, compileOutput, totalTimeMs, LocalDateTime.now());
     }
 
     /** Re-queueing a task must not leave the half-written results of the previous attempt behind. */

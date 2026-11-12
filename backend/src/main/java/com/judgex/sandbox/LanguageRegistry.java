@@ -34,10 +34,30 @@ public class LanguageRegistry {
             String extension,
             String runtime,
             List<String> compileCommand,
-            List<String> runCommand
+            List<String> runCommand,
+            String heapOption
     ) {
         public boolean needsCompile() {
             return compileCommand != null && !compileCommand.isEmpty();
+        }
+
+        /**
+         * Run command carrying the heap cap the problem asked for.
+         *
+         * <p>In local mode only the runtimes that accept a heap flag on their command line
+         * (Java, Node) can be capped; Python/C++ have no equivalent that works on Windows
+         * without job objects. The container sandbox enforces the same number for every
+         * language through {@code --memory}.
+         */
+        public List<String> runCommand(int memoryMb) {
+            if (heapOption == null || memoryMb <= 0) {
+                return runCommand;
+            }
+            List<String> cmd = new ArrayList<>(runCommand.size() + 1);
+            cmd.add(runCommand.get(0));
+            cmd.add(heapOption.formatted(memoryMb));
+            cmd.addAll(runCommand.subList(1, runCommand.size()));
+            return cmd;
         }
     }
 
@@ -50,7 +70,8 @@ public class LanguageRegistry {
             available.put("java", new Language("java", "Java 17", "Main.java",
                     "JDK " + System.getProperty("java.version"),
                     List.of(javac, "-encoding", "UTF-8", "Main.java"),
-                    List.of(java, "-Xmx256m", "-Xss64m", "-XX:+UseSerialGC", "-cp", ".", "Main")));
+                    List.of(java, "-Xss64m", "-XX:+UseSerialGC", "-cp", ".", "Main"),
+                    "-Xmx%dm"));
         }
 
         String python = firstExisting("python", pythonCandidates());
@@ -58,7 +79,7 @@ public class LanguageRegistry {
             String version = version(python);
             if (version != null) {
                 available.put("python", new Language("python", "Python 3", "main.py", version,
-                        List.of(), List.of(python, "-I", "main.py")));
+                        List.of(), List.of(python, "-I", "main.py"), null));
             }
         }
 
@@ -69,7 +90,7 @@ public class LanguageRegistry {
             String version = version(node);
             if (version != null) {
                 available.put("javascript", new Language("javascript", "JavaScript (Node)", "main.js", version,
-                        List.of(), List.of(node, "--max-old-space-size=256", "main.js")));
+                        List.of(), List.of(node, "main.js"), "--max-old-space-size=%d"));
             }
         }
 
@@ -82,7 +103,7 @@ public class LanguageRegistry {
             if (version != null) {
                 available.put("cpp", new Language("cpp", "C++17", "main.cpp", version,
                         List.of(gpp, "-O2", "-std=c++17", "-o", "main.exe", "main.cpp"),
-                        List.of("./main.exe")));
+                        List.of("./main.exe"), null));
             }
         }
 

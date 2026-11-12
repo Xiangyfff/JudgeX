@@ -79,7 +79,7 @@ Worker 循环（每 250ms）:
         双线程读 stdout / stderr，超 64KB 截断
         waitFor(timeLimit) → 超时 destroyForcibly（含子进程树）
         比对输出（忽略行尾空白）
-        写 test_results（唯一索引兜底）
+        写 test_results（重复执行由终态守卫拦在前面）
         推 SSE `case` 事件
    → 汇总：全过 AC，否则取第一个失败用例的判定；得分为通过用例分值之和
    → 清理临时目录
@@ -87,7 +87,13 @@ Worker 循环（每 250ms）:
 
 **编译与运行分开计时**：编译时间不计入单用例时限，否则 Java 这种要起 JVM 的语言会被系统性歧视。
 
+**时限与内存来自题目**：每个用例执行前从 `problems.time_limit_ms` / `memory_limit_mb` 取数，Java 额外给 2 秒 JVM 启动宽限（宽限只加在超时判断上，不影响题目展示的时限）。`MLE` 由运行时自己报的 OOM（`OutOfMemoryError`、`JavaScript heap out of memory` 等）识别——`local` 模式拿不到准确的内存峰值，就只报确定的事。
+
+**重放不会覆盖已出的结果**：开始判题与写入判定都是条件更新（`WHERE id = ? AND status <> 'DONE'`）。回收租约、重复投递、人工重跑带来的迟到结果影响 0 行，直接被丢弃：用户已经看到的判定不会被第二次执行改掉，测试点也不会追加成两份。
+
 **逐用例推送**：`ProgressHub` 为每个 submission 维护一组 `SseEmitter`。判题线程 push 事件时，**先存一份事件快照**，新连进来的客户端立刻收到 `snapshot` 再收增量——避免"打开页面时前面几个用例已经跑完，界面永远缺一块"。
+
+**源码只给作者看**：`GET /api/submissions/{id}` 与它的 `/events` 除了要求登录，还校验提交的 `user_id` 是否等于调用者（管理员除外），否则 403。id 是自增的，能猜到编号不代表有权看别人的代码。
 
 ---
 
@@ -98,12 +104,12 @@ Worker 循环（每 250ms）:
 | 威胁 | `local` 模式 | `docker` 模式（已实现，需 daemon） |
 | --- | --- | --- |
 | 死循环 / 睡死 | `waitFor(timeout)` + `destroyForcibly()` 杀进程树 | 容器 `--stop-timeout` + `docker kill` |
-| 内存炸弹 | `-Xmx` / `--max-old-space-size` / `setrlimit` | `--memory` + `--memory-swap` |
+| 内存炸弹 | Java/Node 的堆上限取自题目配置；Python/C++ 无法在 Windows 上限制 | `--memory` + `--memory-swap` |
 | fork bomb | 无法在 Windows 上限制（Linux 可 `ulimit -u`） | `--pids-limit` |
 | 读宿主文件 | 工作目录隔离，但**不阻止**读绝对路径 | 只读根 + 仅挂载工作目录 |
 | 写宿主文件 | 只写自己的临时目录 | `--read-only` + tmpfs |
 | 联网 | **不阻止** | `--network none` |
-| 提权 / 逃逸 | 不阻止（同用户态） | user namespace + seccomp 白名单 + `--cap-drop ALL` |
+| 提权 / 逃逸 | 不阻止（同用户态） | `--cap-drop ALL` + `no-new-privileges`（尚未配置 user namespace 与 seccomp profile） |
 | 输出洪水 | 读取线程 64KB 截断，标记 `OLE` | 同左（管道在宿主侧截断） |
 
 **这是一份诚实的边界表**：`local` 模式适合"自己的学生写自己的作业"，不适合公网。真正的隔离必须靠内核能力，而 Windows 上没有 cgroup/namespace，所以 `DockerSandbox` 按同一接口实现，切换只需 `JUDGEX_SANDBOX=docker`。
@@ -178,7 +184,7 @@ Worker 循环（每 250ms）:
 - `finish` 在 `@Transactional` 里做两件事：更新 `submissions`，`INSERT INTO outbox`（`event_key = verdict:{submissionId}`，唯一索引兜底幂等）。
 - `OutboxRelay` 每 400ms 扫 `status='PENDING' AND next_attempt_at <= now`（最多 20 条），先 CAS 到 `SENDING` 并打 30s 租约——**relay 自己崩了，30s 后别人能接手**。
 - 投递成功 → `SENT`；失败 → `attempts+1`，`next_attempt_at = now + min(30s, 1s << attempts)`；达到 6 次 → `DEAD`，等人工重放。
-- 消费端 `judgex-notify` 写 `notifications`，`submission_id` 唯一索引让重复投递变成无害操作（at-least-once + 幂等 = 效果上的 exactly-once）。
+- 消费端 `judgex-notify` 写 `notifications`，`submission_id` 唯一索引让重复投递变成无害操作（at-least-once + 幂等 = 效果上的 exactly-once）。写库失败时返回 `RECONSUME_LATER`，由 broker 重投；只有**反序列化不了**的消息才记日志后丢弃——重投一百次也还是坏消息，不能让它堵住队列。
 
 **验证过的故障场景**：停掉 broker → 提交 → 判题照常 AC、`pending=1`、`lastError="No route info of this topic"` → 重启 broker → 27s 后 `pending=0, sent+1`，通知生成。整个过程判题链路一次都没有等 MQ。
 

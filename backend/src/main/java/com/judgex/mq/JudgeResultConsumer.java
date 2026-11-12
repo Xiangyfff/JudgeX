@@ -1,5 +1,6 @@
 package com.judgex.mq;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.judgex.config.JudgexProps;
@@ -75,6 +76,7 @@ public class JudgeResultConsumer {
 
     private ConsumeConcurrentlyStatus consume(List<MessageExt> messages,
                                               org.apache.rocketmq.client.consumer.listener.ConsumeConcurrentlyContext ctx) {
+        boolean retry = false;
         for (MessageExt message : messages) {
             try {
                 JsonNode node = mapper.readTree(new String(message.getBody(), StandardCharsets.UTF_8));
@@ -87,12 +89,18 @@ public class JudgeResultConsumer {
                 long totalMs = node.path("totalMs").asLong();
                 String text = "%s 的「%s」判定 %s · %d 分 · %dms".formatted(userName, title, verdict, score, totalMs);
                 outbox.addNotification(submissionId, userId, verdict, text);
+            } catch (JsonProcessingException e) {
+                // A malformed payload can never succeed on redelivery: log it and drop it so the
+                // queue is not poisoned by one bad message.
+                log.error("malformed message {}, skipped: {}", message.getMsgId(), e.toString());
             } catch (Exception e) {
-                // Malformed payloads are not retryable; log and move on so the queue is not poisoned.
-                log.error("cannot consume message {}: {}", message.getMsgId(), e.toString());
+                // The database is the retryable part. Redelivery is safe: the notification table
+                // has a unique key on submission_id, so a duplicate insert is absorbed.
+                log.error("cannot consume message {}, will retry: {}", message.getMsgId(), e.toString());
+                retry = true;
             }
         }
-        return ConsumeConcurrentlyStatus.CONSUME_SUCCESS;
+        return retry ? ConsumeConcurrentlyStatus.RECONSUME_LATER : ConsumeConcurrentlyStatus.CONSUME_SUCCESS;
     }
 
     @PreDestroy

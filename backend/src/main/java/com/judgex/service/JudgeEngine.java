@@ -64,7 +64,12 @@ public class JudgeEngine {
                 log.warn("submission {} vanished before judging", submissionId);
                 return;
             }
-            submissions.markRunning(submissionId);
+            // Replays reach here too (reclaimed lease, duplicate dispatch). A submission that is
+            // already terminal has an answer the user saw; re-running it can only corrupt it.
+            if (submissions.markRunning(submissionId) == 0) {
+                log.info("submission {} already finished, skipping replay", submissionId);
+                return;
+            }
             hub.publish(submissionId, "status", Map.of("status", "RUNNING", "submissionId", submissionId));
 
             LanguageRegistry.Language lang = languages.get(row.language());
@@ -79,7 +84,7 @@ public class JudgeEngine {
 
             if (lang.needsCompile()) {
                 ExecResult compile = sandbox.exec(lang.compileCommand(), workDir, "",
-                        30_000, row.language().equals("java") ? 512 : 512, props.sandbox().maxOutputBytes());
+                        30_000, 512, props.sandbox().maxOutputBytes());
                 String compileLog = combined(compile);
                 if (compile.error() != null) {
                     finish(submissionId, "SYSTEM_ERROR", 0, compileLog, 0);
@@ -105,10 +110,13 @@ public class JudgeEngine {
             List<String> verdicts = new ArrayList<>();
 
             for (ProblemMapper.JudgeCase c : cases) {
-                ExecResult r = sandbox.exec(lang.runCommand(), workDir, c.input(),
-                        row.language().equals("java") ? 6000 : 4000,
-                        512,
-                        props.sandbox().maxOutputBytes());
+                // Limits belong to the problem; the engine only supplies fallbacks for old rows.
+                int memoryMb = c.memoryLimitMb() > 0 ? c.memoryLimitMb() : 512;
+                int limitMs = c.timeLimitMs() > 0 ? c.timeLimitMs() : 2000;
+                // JVM startup is not the solution's cost, so Java gets a fixed grace on top.
+                int timeoutMs = limitMs + ("java".equals(row.language()) ? 2000 : 0);
+                ExecResult r = sandbox.exec(lang.runCommand(memoryMb), workDir, c.input(),
+                        timeoutMs, memoryMb, props.sandbox().maxOutputBytes());
 
                 String verdict = classify(r, c.expectedOutput());
                 totalTime += r.timeMs();
@@ -160,7 +168,12 @@ public class JudgeEngine {
     private void finish(long submissionId, String verdict, int score, String compileOutput, long totalTime) {
         submissions.find(submissionId).ifPresent(row -> {
             // Verdict + outbox row commit together; delivery to the broker happens later.
-            results.finishAndPublish(row, verdict, score, compileOutput, totalTime);
+            // A submission that already reached a terminal state must not be overwritten by a
+            // late result (replayed task, expired lease, duplicated execution).
+            if (!results.finishAndPublish(row, verdict, score, compileOutput, totalTime)) {
+                log.info("submission {} already finished, late {} result dropped", submissionId, verdict);
+                return;
+            }
             List<Dto.TestResultRow> results = submissions.results(submissionId);
             hub.finish(submissionId, Map.of(
                     "row", row,
@@ -188,9 +201,24 @@ public class JudgeEngine {
             return "OLE";
         }
         if (r.exitCode() != 0) {
-            return "RE";
+            return looksLikeOutOfMemory(r.stderr()) ? "MLE" : "RE";
         }
         return normalize(r.stdout()).equals(normalize(expected)) ? "AC" : "WA";
+    }
+
+    /**
+     * Local mode cannot measure resident memory, so the runtime's own out-of-memory message is
+     * the only honest signal that the heap cap was hit. The container sandbox reports it through
+     * a non-zero exit as well, and the same patterns match.
+     */
+    private static boolean looksLikeOutOfMemory(String stderr) {
+        if (stderr == null || stderr.isEmpty()) {
+            return false;
+        }
+        return stderr.contains("OutOfMemoryError")
+                || stderr.contains("JavaScript heap out of memory")
+                || stderr.contains("MemoryError")
+                || stderr.contains("std::bad_alloc");
     }
 
     private static String dominant(List<String> verdicts) {

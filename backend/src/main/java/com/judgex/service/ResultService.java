@@ -39,11 +39,16 @@ public class ResultService {
     }
 
     @Transactional
-    public void finishAndPublish(Dto.SubmissionRow row, String verdict, int score,
-                                 String compileOutput, long totalMs) {
-        submissions.finish(row.id(), "DONE", verdict, score, compileOutput, totalMs);
+    public boolean finishAndPublish(Dto.SubmissionRow row, String verdict, int score,
+                                    String compileOutput, long totalMs) {
+        int written = submissions.finish(row.id(), "DONE", verdict, score, compileOutput, totalMs);
+        if (written == 0) {
+            // Already terminal: the verdict the user saw stays, and no second event goes out.
+            log.info("submission {} already finished, late verdict {} ignored", row.id(), verdict);
+            return false;
+        }
         if (!props.mq().enabled()) {
-            return;
+            return true;
         }
         try {
             Map<String, Object> event = new LinkedHashMap<>();
@@ -62,5 +67,6 @@ public class ResultService {
             // Serialisation problems must not roll back a real verdict; the submission is the truth.
             log.error("cannot enqueue verdict event for {}: {}", row.id(), e.toString());
         }
+        return true;
     }
 }

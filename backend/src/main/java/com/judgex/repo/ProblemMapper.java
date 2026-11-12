@@ -18,7 +18,12 @@ import java.util.Optional;
 @Mapper
 public interface ProblemMapper {
 
-    record JudgeCase(long id, int ordinal, String input, String expectedOutput, int points) {
+    /**
+     * The per-case limits come from the problem row, not from a constant in the engine:
+     * a problem that says 1000 ms / 128 MB must actually be judged with 1000 ms / 128 MB.
+     */
+    record JudgeCase(long id, int ordinal, String input, String expectedOutput, int points,
+                     int timeLimitMs, int memoryLimitMb) {
     }
 
     List<Dto.ProblemSummary> summaries(@Param("includeUnpublished") boolean includeUnpublished);

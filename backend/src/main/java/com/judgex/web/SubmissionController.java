@@ -40,8 +40,9 @@ public class SubmissionController {
     }
 
     @GetMapping("/{id}")
-    public Dto.SubmissionDetail detail(@PathVariable long id) {
-        return submissions.detail(id);
+    public Dto.SubmissionDetail detail(@RequestAttribute(AuthFilter.USER_ATTR) UserPrincipal user,
+                                       @PathVariable long id) {
+        return submissions.detail(id, user);
     }
 
     /**
@@ -50,11 +51,13 @@ public class SubmissionController {
      * next event.
      */
     @GetMapping(value = "/{id}/events", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter events(@PathVariable long id) {
+    public SseEmitter events(@RequestAttribute(AuthFilter.USER_ATTR) UserPrincipal user,
+                             @PathVariable long id) {
+        // Authorise before subscribing: an unauthorised caller must not even join the feed.
+        Dto.SubmissionDetail snapshot = submissions.detail(id, user);
         SseEmitter emitter = hub.subscribeSubmission(id);
         try {
-            emitter.send(SseEmitter.event().name("snapshot").data(Map.of(
-                    "submission", submissions.detail(id))));
+            emitter.send(SseEmitter.event().name("snapshot").data(Map.of("submission", snapshot)));
         } catch (Exception e) {
             emitter.completeWithError(e);
         }

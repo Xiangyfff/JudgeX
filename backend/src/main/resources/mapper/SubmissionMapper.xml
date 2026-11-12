@@ -75,12 +75,22 @@
         ORDER BY ordinal
     </select>
 
+    <!--
+      Starting a judge run is the first write of that run: if the submission is already
+      terminal the replay is abandoned here, before any test result can be appended.
+      0 affected rows tells the engine to stop.
+    -->
     <update id="markRunningRow">
         UPDATE submissions
            SET status = 'RUNNING', started_at = #{now}
          WHERE id = #{id}
+           AND status &lt;&gt; 'DONE'
     </update>
 
+    <!--
+      Terminal-state guard: a replayed or duplicated judge run must never overwrite the
+      verdict the user already saw. 0 affected rows tells the caller to drop the late result.
+    -->
     <update id="finishRow">
         UPDATE submissions
            SET status = #{status},
@@ -90,6 +100,7 @@
                total_time_ms = #{totalTimeMs},
                finished_at = #{now}
          WHERE id = #{id}
+           AND status &lt;&gt; 'DONE'
     </update>
 
     <delete id="deleteResults">

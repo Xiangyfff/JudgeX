@@ -85,6 +85,10 @@ judgex:
 logging:
   level:
     root: INFO
-    com.judgex: DEBUG
+    com.judgex: INFO
+    # The queue poll runs every 250ms and the outbox relay every 400ms; at DEBUG each statement
+    # writes four lines, which is pure noise (and measurable overhead) on an idle worker.
+    com.judgex.repo: WARN
+    com.judgex.mq: WARN
   pattern:
     console: "%d{HH:mm:ss.SSS} %-5level [%X{traceId:-}] %logger{20} - %msg%n"
