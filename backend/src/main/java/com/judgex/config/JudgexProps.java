@@ -43,7 +43,16 @@ public record JudgexProps(
              */
             String runAsUser,
             /** Explicit seccomp profile; blank uses the profile bundled in the jar. */
-            String seccompProfile
+            String seccompProfile,
+            /**
+             * Extra wall clock on top of the problem limit before the outer fuse fires, in
+             * docker mode. The container must boot (700-800 ms and rising under load) before
+             * the program even starts; the fuse only exists to stop a hung judge, it never
+             * decides TLE — runtime is measured inside the sandbox.
+             */
+            int startupAllowanceMs,
+            /** Same fuse headroom for local-process mode, where nothing boots. */
+            int localStartupAllowanceMs
     ) {
     }
 

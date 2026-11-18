@@ -249,12 +249,11 @@ clone(NEWUSER):   rc=-1 errno=1 (EPERM)
 3. **镜像风险**：`judgex-runner:latest` 约 772 MB（本地镜像 ID `sha256:d407152bfc01`，2026-11-12 构建），基础镜像未固定 digest、未做 CVE 扫描/最小化，含完整 JDK/Node/Python 工具链，供应链与镜像漏洞面仍在。
 4. **工作目录无配额**：`/work` 是宿主 bind mount，单文件被 fsize 限制 64 MB，但可以写多个文件/大量小文件耗尽磁盘；无 inode/总量配额；宿主上该目录 0777，其他本机进程可读写。
 5. **seccomp 是拒绝清单而非白名单**：默认放行仍允许 `execve`、`fork`、`memfd_create`、`socketpair`、`chmod` 等大量系统调用；AF_UNIX socket、共享内存替代路径等未封；新内核攻击面仍开放。
-6. **判定竞态**：2 秒限制包含容器启动时间，高负载时输出洪泛可能先判 TLE 而非 OLE（实测出现过 1 次 2088 ms 的 TLE）；判题安全（强杀容器），但结果不稳定。
-7. **资源限制不完整**：无磁盘 I/O（blkio）限制、无总磁盘配额；CPU 1.0、内存 256 MB、pids 64 已限。
-8. **`/proc` 可见自身进程**：PID 命名空间隔离，但容器内仍可读自身 `/proc`；ptrace/pidfd_getfd 已封，跨容器不可见。
-9. **Docker daemon 暴露面**：未挂载 `docker.sock`（好），但 daemon 本身以高权限运行在宿主，属平台风险。
-10. **判题工作目录生命周期**：判题结束 `deleteQuietly` 删除 `sub-<id>`；异常崩溃时可能残留目录（本轮验证未出现）。
-11. **性能复测受环境限制**：本轮宿主有游戏与高换页，未取得安静状态样本；「加固后回落到 400～550 ms」待机器空闲时复测确认。
+6. **资源限制不完整**：无磁盘 I/O（blkio）限制、无总磁盘配额；CPU 1.0、内存 256 MB、pids 64 已限。
+7. **`/proc` 可见自身进程**：PID 命名空间隔离，但容器内仍可读自身 `/proc`；ptrace/pidfd_getfd 已封，跨容器不可见。
+8. **Docker daemon 暴露面**：未挂载 `docker.sock`（好），但 daemon 本身以高权限运行在宿主，属平台风险。
+9. **判题工作目录生命周期**：判题结束 `deleteQuietly` 删除 `sub-<id>`；异常崩溃时可能残留目录（本轮验证未出现）。
+10. **性能复测受环境限制**：本轮宿主有游戏与高换页，未取得安静状态样本；「加固后回落到 400～550 ms」待机器空闲时复测确认。
 
 ## 八、仍然存在的限制
 
@@ -263,9 +262,84 @@ clone(NEWUSER):   rc=-1 errno=1 (EPERM)
 3. **容器模式没有 C++**：镜像里没有 g++，`cpp` 提交在容器模式下编译失败；本机模式可用（MinGW）。
 4. **Python / C++ 在本机模式没有内存上限**：Windows 没有 `rlimit`，本机模式只有 Java（`-Xmx`）和 Node（`--max-old-space-size`）能按题目配置压住；容器模式对四种语言都靠 `--memory` 统一限制。
 5. **内存峰值一栏仍是 `—`**：两种模式都没有采集实际 RSS，MLE 靠运行时自报 OOM（本机）或退出码 137（容器）。
-6. **判定耗时受负载影响**：同一个 a+b，空闲时单用例 114～120 ms，机器忙时 185～212 ms；容器模式另有启动开销。报告里的毫秒数只用于横向比较。
+6. **判定耗时仍受负载影响，但已不计入判定**：同一个 a+b，容器模式下程序自身耗时约 45～85 ms（Java 含 JVM 启动约 130～160 ms），宿主忙时这段耗时会轻微上浮；容器启动（0.6～1.2 s）单独给宽限、不进时限，也不再写进 `time_ms`（见第九节）。报告里的端到端毫秒数只用于横向比较。
 7. **并发数据只有 3 个用户**：演示账号只有三个，更多用户的并发与限流没有压测数据。
 8. **镜像需要本地构建**：`docker/runner/Dockerfile` 依赖能访问镜像仓库的代理（本机走 `docker.m.daocloud.io`），离线机器上要先准备好基础镜像。
+
+## 九、判定口径：时限只计程序运行时间（2026-11-18）
+
+前八节里的 TLE 数字（2022～2099 ms）都是**旧口径**：从 `docker run` 发出开始计时，到进程退出结束。容器启动（安静时 0.6～0.8 s，宿主忙时 1 s 以上）因此被算进了单用例时限。题目时限 2000 ms 时它只是白吃掉三分之一预算；换成时限更紧、或者输出刚好触顶的用例，就会把本应 AC / OLE 的结果挤成 TLE。实测同一份 AC 程序连续提交，出现过 **4 次 OLE + 1 次 TLE**（原始日志见 `E:\dsh-try\tmp\sandbox-hardening-report.md`、`probe-run*.log`）。
+
+### 9.1 新口径
+
+- **容器内打点**：`DockerSandbox` 把只读的 `clock.sh` 挂到 `/judgex-clock/`，用它包住原命令——`date +%s%N > .judgex-start` → 执行用户程序 → `date +%s%N > .judgex-end`。两个文件写在 `/work`（宿主 bind mount），宿主直接读，`runMs = (end - start) / 1e6`；文件缺失（被保险丝强杀）时 `runMs = -1`。脚本用 LF 换行、临时文件不进 stdin/stdout，跑完即删。
+- **判定用 `effective`**：`effective = runMs >= 0 ? runMs : 墙钟 elapsed`；`effective > limit + 100 ms`（抖动容差）才判 TLE。
+- **外层超时只是保险丝**：`waitFor(limit + startupAllowance)`。docker 模式默认 `+3000 ms`、local 模式 `+500 ms`，配置项是 `judgex.sandbox.startup-allowance-ms` / `judgex.sandbox.local-startup-allowance-ms`。被保险丝掐断（`runMs = -1` 且超时）仍然判 TLE，展示耗时记为时限本身而不是「时限 + 宽限」。
+- **写库用 `effective`**：`test_results.time_ms` 与 `submissions.total_time_ms` 都是程序自身耗时。
+- **编译同样处理**：编译 30 s + 3000 ms 宽限，展示用编译进程自身耗时。
+- 判定顺序不变：OLE 先于 TLE；CE / RE / MLE 逻辑未动。
+
+### 9.2 16 条用例：改前 / 改后
+
+同一台机器、同一组用例，只换 jar（改前 = `f25f8a0`，改后 = 本次提交）：
+
+| 用例 | 改前单用例 | 改后单用例 | 判定 |
+| :--- | :--- | :--- | :--- |
+| 正常 a+b（Python） | 725～816 ms | **46～56 ms** | AC → AC |
+| 正常 a+b（Java） | 710～840 ms | **134～158 ms** | AC → AC |
+| 正常 a+b（JavaScript） | 673～706 ms | **75～83 ms** | AC → AC |
+| `while True: pass` | 2067～2088 ms | **2000～2000 ms**（保险丝掐断，记为时限） | TLE → TLE |
+| 无限往 stdout 写 | 638～1009 ms | **601～661 ms** | OLE → OLE |
+| 除零 | 661～699 ms | **46～55 ms** | RE → RE |
+| Java 少写分号 | — | — | CE → CE |
+| Java 持续分配内存 | 1120～1596 ms | **373～528 ms** | MLE → MLE |
+| 读 `C:\Windows\win.ini` | 658～779 ms | **49～55 ms** | RE → RE |
+| 连 `127.0.0.1:3306` | 776～820 ms | **150～158 ms** | RE → RE |
+| 往 `/` 写文件 | 665～791 ms | **51～53 ms** | RE → RE |
+| 往 `/tmp` 写文件 | 652～695 ms | **45～53 ms** | WA → WA |
+| fork 50 个子进程 | 2063～2094 ms | **3376～3499 ms**（程序真跑完，按运行时间判） | TLE → TLE |
+| 起 `sleep 25` 子进程后立刻退出 | 763～813 ms | **169～179 ms** | WA → WA |
+| 打印当前目录 | 633～664 ms | **45～51 ms** | WA → WA |
+| 源码约 70 KB | — | — | 400 → 400 |
+
+16 条判定与改前**逐条一致**：AC / CE / TLE / OLE / RE / MLE 各归各位，读宿主文件、连内网、写根目录仍然被拒，70 KB 源码仍然 400。Java 的 134～158 ms 比 Python 高，是因为 JVM 启动算在程序自身运行时间里（口径如此），不再额外给 2 秒。
+
+### 9.3 写库数字（AC 用例）
+
+| 提交 | 语言 | 改前 `total_time_ms` / 单用例 | 改后 `total_time_ms` / 单用例 |
+| :--- | :--- | :--- | :--- |
+| #240 → #270 | Python | 3823 / 765,725,757,760,816 | **254 / 55,56,49,46,48** |
+| #241 → #271 | Java | 3923 / 840,812,791,710,770 | **750 / 150,154,154,158,134** |
+| #242 → #272 | JavaScript | 3485 / 706,703,700,673,703 | **390 / 78,78,83,75,76** |
+
+改前 `total_time_ms` 里 80% 以上是容器启动；改后剩下的就是程序自己——Python a+b 单用例不到 60 ms。
+
+### 9.4 抗抖动验证
+
+用 8 个 PowerShell 忙循环把 8 个核跑满（每个单线程死循环，宿主 32 线程），期间连续提交同一份 Python a+b **10 次**（脚本 `E:\dsh-try\tmp\jitter-test.ps1`，结果 `jitter-result.json`）：
+
+```
+[1/10] AC total=302ms cases=54~72ms   [6/10] AC total=280ms cases=52~62ms
+[2/10] AC total=263ms cases=48~64ms   [7/10] AC total=272ms cases=51~57ms
+[3/10] AC total=264ms cases=52~54ms   [8/10] AC total=277ms cases=53~58ms
+[4/10] AC total=305ms cases=58~64ms   [9/10] AC total=264ms cases=50~57ms
+[5/10] AC total=267ms cases=49~56ms   [10/10] AC total=299ms cases=55~63ms
+AC 10/10
+```
+
+**10/10 全部 AC**，单用例 48～72 ms，没有一次 TLE/OLE。同样的负载在旧口径下足以让启动时间涨到 800～1000 ms，正好卡在 OLE/TLE 的判定边上。
+
+### 9.5 真 TLE 仍然判 TLE
+
+- `while True: pass`：程序永远不结束，5 秒保险丝（2000 + 3000）到点强杀，`runMs = -1`，仍判 **TLE**，展示 2000 ms（= 时限），端到端 26.4 s（5 个用例 × 5 s 保险丝，这是变慢的部分）。
+- fork 50 个子进程：程序实际跑约 3.4 s 后结束，`runMs` 有值，按运行时间判 **TLE**（3.4 s > 2.1 s），不再是「启动时间背锅」。
+
+### 9.6 代价与注意
+
+- TLE 提交变慢：每个用例最多要等 `limit + 3000 ms` 才掐断（原来只等 2 s），`while True` 这类 5 用例从 12 s 变成 26 s。这是「保险丝必须比时限宽」的必然代价。
+- 每次执行多一个只读挂载（`/judgex-clock`，脚本约 60 字节），实测对启动耗时没有可测影响。
+- 时钟脚本物化失败时（`%TEMP%` 不可写）自动退回旧行为：不挂载、按墙钟判定，并在日志里打 `could not prepare the sandbox clock script`——判题不中断，只是失去精度。
+- 打点用的是容器内 `CLOCK_MONOTONIC` 风格的墙上时钟（`date +%s%N`，纳秒），同一容器内两次取值的差值不受 NTP 跳变影响。
 
 ## 结论
 

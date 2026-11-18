@@ -81,7 +81,7 @@ Worker 循环（事件驱动，2s 兜底）:
    → 逐用例：
         起子进程（stdin 喂输入）
         双线程读 stdout / stderr，超 64KB 截断
-        waitFor(timeLimit) → 超时 destroyForcibly（含子进程树）
+        waitFor(timeLimit + 启动宽限) → 超时强杀（保险丝，不作判定依据）
         比对输出（忽略行尾空白）
         写 test_results（重复执行由终态守卫拦在前面）
         推 SSE `case` 事件
@@ -91,7 +91,7 @@ Worker 循环（事件驱动，2s 兜底）:
 
 **编译与运行分开计时**：编译时间不计入单用例时限，否则 Java 这种要起 JVM 的语言会被系统性歧视。
 
-**时限与内存来自题目**：每个用例执行前从 `problems.time_limit_ms` / `memory_limit_mb` 取数，Java 额外给 2 秒 JVM 启动宽限（宽限只加在超时判断上，不影响题目展示的时限）。`MLE` 由运行时自己报的 OOM（`OutOfMemoryError`、`JavaScript heap out of memory` 等）识别——`local` 模式拿不到准确的内存峰值，就只报确定的事。
+**时限只算程序自己的运行时间**：每个用例执行前从 `problems.time_limit_ms` / `memory_limit_mb` 取数。容器模式用只读挂载的 `clock.sh` 在程序起止各写一次 `date +%s%N`，宿主从 `/work`（bind mount）读这两个时间戳算出 `runMs`；`local` 模式进程直连，`runMs` 就是墙钟。TLE 判定为 `runMs > time_limit_ms + 100 ms`（抖动容差），写进 `test_results.time_ms` / `submissions.total_time_ms` 的也是 `runMs`。外层 `waitFor(time_limit_ms + 启动宽限)` 只是**保险丝**（docker 默认 3000 ms、local 500 ms，见 `judgex.sandbox.startup-allowance-ms` / `local-startup-allowance-ms`）：被它掐断（拿不到结束时间戳）仍判 TLE，展示为时限本身；容器启动那 0.6～1.2 s 不再进入判定与计时。编译同理：30 s + 3000 ms 宽限，展示用编译进程自身耗时。`MLE` 由运行时自己报的 OOM（`OutOfMemoryError`、`JavaScript heap out of memory` 等）识别——`local` 模式拿不到准确的内存峰值，就只报确定的事。
 
 **重放不会覆盖已出的结果**：开始判题与写入判定都是条件更新（`WHERE id = ? AND status <> 'DONE'`）。回收租约、重复投递、人工重跑带来的迟到结果影响 0 行，直接被丢弃：用户已经看到的判定不会被第二次执行改掉，测试点也不会追加成两份。
 
@@ -107,7 +107,7 @@ Worker 循环（事件驱动，2s 兜底）:
 
 | 威胁 | `local` 模式 | `docker` 模式 |
 | --- | --- | --- |
-| 死循环 / 睡死 | `waitFor(timeout)` + 杀整个进程树（执行期间采样 `descendants()`） | 每次执行一个容器名，超时 `docker kill -s KILL` 杀容器本身（实测 2049～2059 ms） |
+| 死循环 / 睡死 | `waitFor(timeout)` + 杀整个进程树（执行期间采样 `descendants()`） | 每次执行一个容器名，超时 `docker kill -s KILL` 杀容器本身（保险丝 = 时限 + 3 s；被掐断的真 TLE 记为时限 2000 ms） |
 | 内存炸弹 | Java/Node 的堆上限取自题目配置；Python/C++ 无法在 Windows 上限制 | `--memory` + `--memory-swap`，Python 撑爆被 OOM kill，退出码 137 判 `MLE` |
 | fork bomb | 无法在 Windows 上限制（Linux 可 `ulimit -u`） | `--pids-limit 64`，实测 fork 失败 |
 | 读宿主文件 | 工作目录隔离，但**不阻止**读绝对路径 | 只读根 + 仅挂载工作目录，实测读 `win.ini` 报 `FileNotFoundError` |
@@ -134,11 +134,11 @@ Worker 循环（事件驱动，2s 兜底）:
 3. **镜像风险**：`judgex-runner:latest`（本地 `sha256:d407152bfc01`，2026-11-12 构建，约 772 MB）基础镜像未固定 digest，未做 CVE 扫描与最小化，含完整 JDK/Node/Python 工具链。
 4. **工作目录无配额**：`/work` 是宿主 bind mount，单文件被 `ulimit fsize=64MB` 限制，但总磁盘与 inode 没有配额；宿主上该目录是 0777，本机其他进程可读写。
 5. **seccomp 是拒绝清单而非白名单**：默认放行，`execve`、`fork`、`memfd_create`、`socketpair`、`chmod` 等仍然可用，AF_UNIX 与共享内存替代路径未封。
-6. **判定竞态**：时限含容器启动时间，高负载下输出洪泛可能先撞 2 秒判 `TLE` 而不是 `OLE`（实测出现过一次 2088 ms 的 TLE）。安全上没问题，结果稳定性上有瑕疵。
-7. **资源限制不完整**：没有 blkio 与总磁盘配额；CPU/内存/pids/单文件已限。
-8. **`/proc` 与 daemon**：容器内仍可读自身 `/proc`；Docker daemon 未挂 `docker.sock` 给容器，但 daemon 本身以高权限运行在宿主，属平台风险。
-9. **工作目录生命周期**：异常崩溃可能残留 `sub-<id>` 目录（本轮验证未出现，正常结束会删除）。
-10. **性能复测受环境限制**：本轮宿主有游戏占 486% CPU 且内存吃紧，未取得安静状态样本；加固本身开销 ≈0，400→800 ms 的翻倍来自容器启动，待机器空闲时复测确认回落。
+6. **资源限制不完整**：没有 blkio 与总磁盘配额；CPU/内存/pids/单文件已限。
+7. **`/proc` 与 daemon**：容器内仍可读自身 `/proc`；Docker daemon 未挂 `docker.sock` 给容器，但 daemon 本身以高权限运行在宿主，属平台风险。
+8. **工作目录生命周期**：异常崩溃可能残留 `sub-<id>` 目录（本轮验证未出现，正常结束会删除）。
+9. **保险丝比时限宽**：真 TLE 用例最多多等 3 s/用例（`while True` 5 个用例从 12 s 变 26 s）；换来的是不再把容器启动算进判定。时钟脚本物化失败时退回墙钟判定，会重新出现启动计入时限的抖动（日志有 `could not prepare the sandbox clock script`）。
+10. **性能复测受环境限制**：本轮宿主有游戏占 486% CPU 且内存吃紧，未取得安静状态样本；加固本身开销 ≈0，容器启动 0.6～1.2 s 是环境开销，已不计入判定。
 
 ---
 

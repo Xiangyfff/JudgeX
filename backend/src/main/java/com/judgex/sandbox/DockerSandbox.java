@@ -11,6 +11,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
@@ -32,11 +33,34 @@ public class DockerSandbox implements SandboxRunner {
     /** One file may not exceed 64 MiB: /work is a host bind mount with no quota. */
     private static final long MAX_FILE_BYTES = 64L * 1024 * 1024;
 
+    /** Program start/end stamps, written inside /work (the host bind mount) and read back here. */
+    private static final String START_STAMP = ".judgex-start";
+    private static final String END_STAMP = ".judgex-end";
+
+    /**
+     * The wrapper is a file mounted read-only into the container, not a {@code sh -c} argument:
+     * the Windows command line that starts docker.exe cannot carry the embedded double quotes of
+     * a shell script, and losing them silently splits the program's own arguments
+     * ({@code python -c "import ast;..."} becomes {@code python -c import}), which fails
+     * compilation. A file keeps the script text byte-for-byte and the argv clean.
+     */
+    private static final String CLOCK_DIR = "/judgex-clock";
+    private static final String CLOCK_FILE = "clock.sh";
+    private static final String CLOCK_SCRIPT =
+            "#!/bin/sh\n"
+                    + "date +%s%N > " + START_STAMP + "\n"
+                    + "\"$@\"\n"
+                    + "__judgex_ec=$?\n"
+                    + "date +%s%N > " + END_STAMP + "\n"
+                    + "exit $__judgex_ec\n";
+
     private final JudgexProps props;
     private volatile Boolean cachedAvailable;
     private volatile long checkedAt;
     /** null = not resolved yet, empty = unavailable, otherwise an absolute path. */
     private volatile String preparedSeccomp;
+    /** Host directory holding clock.sh; mounted read-only at {@link #CLOCK_DIR}. */
+    private volatile String preparedClockDir;
 
 
     public DockerSandbox(JudgexProps props) {
@@ -110,13 +134,21 @@ public class DockerSandbox implements SandboxRunner {
             docker.add("--security-opt");
             docker.add("seccomp=" + seccomp);
         }
-        docker.addAll(List.of(
+        String clockDir = clockDir();
+        List<String> mounts = new ArrayList<>(List.of(
                 "-v", workDir.toAbsolutePath() + ":/work:rw",
                 "-w", "/work",
-                "-e", "HOME=/tmp",
-                props.sandbox().dockerImage()
-        ));
-        docker.addAll(command);
+                "-e", "HOME=/tmp"));
+        if (!clockDir.isEmpty()) {
+            mounts.add("-v");
+            mounts.add(clockDir + ":" + CLOCK_DIR + ":ro");
+        }
+        mounts.add(props.sandbox().dockerImage());
+        docker.addAll(mounts);
+        // Starting the container costs 700-800 ms on a busy host; the program inside may run in
+        // 50 ms. The wrapper stamps the program's own window so startup is never charged to the
+        // submission, and the outer timer below stays what it is: a fuse, not a verdict.
+        docker.addAll(clockDir.isEmpty() ? command : wrapped(command));
 
         long start = System.nanoTime();
         try {
@@ -170,13 +202,94 @@ public class DockerSandbox implements SandboxRunner {
                 }
             }
             long elapsed = (System.nanoTime() - start) / 1_000_000;
-            return new ExecResult(exit, outBuf.toString(), errBuf.toString(), elapsed, 0, !finished,
-                    overflow[0], null);
+            return new ExecResult(exit, outBuf.toString(), errBuf.toString(), elapsed,
+                    readRunMs(workDir), 0, !finished, overflow[0], null);
         } catch (IOException e) {
             return ExecResult.systemError("docker exec failed: " + e.getMessage());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return ExecResult.systemError("interrupted");
+        }
+    }
+
+    /** {@code sh <script> <command...>}: the script runs the command as its positional args. */
+    private static List<String> wrapped(List<String> command) {
+        List<String> wrapped = new ArrayList<>(command.size() + 2);
+        wrapped.add("sh");
+        wrapped.add(CLOCK_DIR + "/" + CLOCK_FILE);
+        wrapped.addAll(command);
+        return wrapped;
+    }
+
+    /**
+     * Host directory holding clock.sh, materialised once in the temp dir (outside the read-only
+     * judge dirs) and mounted read-only. The file is written with explicit LF line endings:
+     * CRLF would make dash look for {@code .judgex-start\r} and silently lose the measurement.
+     */
+    private String clockDir() {
+        String prepared = preparedClockDir;
+        if (prepared == null) {
+            synchronized (this) {
+                if (preparedClockDir == null) {
+                    preparedClockDir = prepareClockDir();
+                }
+                prepared = preparedClockDir;
+            }
+        }
+        return prepared;
+    }
+
+    private static String prepareClockDir() {
+        Path dir = Path.of(System.getProperty("java.io.tmpdir"), "judgex-clock").toAbsolutePath();
+        try {
+            Files.createDirectories(dir);
+            Path script = dir.resolve(CLOCK_FILE);
+            byte[] bytes = CLOCK_SCRIPT.getBytes(StandardCharsets.US_ASCII);
+            if (!Files.isRegularFile(script) || !Arrays.equals(Files.readAllBytes(script), bytes)) {
+                Files.write(script, bytes);
+            }
+            return dir.toString();
+        } catch (IOException e) {
+            // No clock file means no stamps: verdicts fall back to the wall clock, which is
+            // the old behaviour. Judging keeps working, it just loses the refinement.
+            log.error("could not prepare the sandbox clock script: {}", e.toString());
+            return "";
+        }
+    }
+
+    /**
+     * Program runtime in milliseconds, or -1 when the stamps are missing/unreadable (the
+     * container was killed) or disagree (clock went backwards). Always removes the stamps,
+     * so they never show up in a later case or in the submission's own work dir.
+     */
+    private long readRunMs(Path workDir) {
+        Path startFile = workDir.resolve(START_STAMP);
+        Path endFile = workDir.resolve(END_STAMP);
+        try {
+            long start = parseNanos(startFile);
+            long end = parseNanos(endFile);
+            if (start > 0 && end >= start) {
+                return (end - start) / 1_000_000L;
+            }
+            if (start > 0) {
+                log.warn("run stamps unusable in {} (start={}, end={}); runtime unknown", workDir, start, end);
+            }
+            return -1;
+        } finally {
+            try {
+                Files.deleteIfExists(startFile);
+                Files.deleteIfExists(endFile);
+            } catch (IOException ignored) {
+                // the whole work dir is deleted after the submission anyway
+            }
+        }
+    }
+
+    private static long parseNanos(Path file) {
+        try {
+            return Long.parseLong(Files.readString(file, StandardCharsets.US_ASCII).trim());
+        } catch (Exception e) {
+            return -1;
         }
     }
 

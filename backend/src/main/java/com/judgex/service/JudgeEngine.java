@@ -32,6 +32,13 @@ public class JudgeEngine {
 
     private static final Logger log = LoggerFactory.getLogger(JudgeEngine.class);
 
+    /**
+     * Millisecond slack before a measured runtime counts as TLE. It covers scheduling jitter,
+     * the wrapper's fork/exec and millisecond truncation — deliberately tiny, because the
+     * startup cost it used to hide is now excluded before the comparison.
+     */
+    private static final int JITTER_TOLERANCE_MS = 100;
+
     private final SubmissionMapper submissions;
     private final ProblemMapper problems;
     private final LanguageRegistry languages;
@@ -84,18 +91,19 @@ public class JudgeEngine {
 
             if (lang.needsCompile()) {
                 ExecResult compile = sandbox.exec(lang.compileCommand(sandbox.container()), workDir, "",
-                        30_000, 512, props.sandbox().maxOutputBytes());
+                        30_000 + allowanceMs(), 512, props.sandbox().maxOutputBytes());
                 String compileLog = combined(compile);
+                long compileTimeMs = compile.effectiveMs();
                 if (compile.error() != null) {
                     finish(submissionId, "SYSTEM_ERROR", 0, compileLog, 0);
                     return;
                 }
                 if (compile.timedOut() || compile.exitCode() != 0) {
                     finish(submissionId, "CE", 0, compileLog.isBlank() ? "compilation failed" : compileLog,
-                            compile.timeMs());
+                            compileTimeMs);
                     return;
                 }
-                hub.publish(submissionId, "compiled", Map.of("log", compileLog, "timeMs", compile.timeMs()));
+                hub.publish(submissionId, "compiled", Map.of("log", compileLog, "timeMs", compileTimeMs));
             }
 
             List<ProblemMapper.JudgeCase> cases = problems.judgeCases(row.problemId());
@@ -113,35 +121,38 @@ public class JudgeEngine {
                 // Limits belong to the problem; the engine only supplies fallbacks for old rows.
                 int memoryMb = c.memoryLimitMb() > 0 ? c.memoryLimitMb() : 512;
                 int limitMs = c.timeLimitMs() > 0 ? c.timeLimitMs() : 2000;
-                // JVM startup is not the solution's cost, so Java gets a fixed grace on top.
-                int timeoutMs = limitMs + ("java".equals(row.language()) ? 2000 : 0);
+                // The outer timer is a fuse: limit + boot headroom. It kills a hung run, but the
+                // verdict comes from the runtime measured inside the sandbox (r.runMs()).
+                int timeoutMs = limitMs + allowanceMs();
                 ExecResult r = sandbox.exec(lang.runCommand(memoryMb, sandbox.container()), workDir, c.input(),
                         timeoutMs, memoryMb, props.sandbox().maxOutputBytes());
 
-                String verdict = classify(r, c.expectedOutput());
-                totalTime += r.timeMs();
+                // What the user sees is the program's own runtime, never the container boot.
+                long effective = shownMs(r, limitMs);
+                String verdict = classify(r, c.expectedOutput(), limitMs);
+                totalTime += effective;
                 if ("AC".equals(verdict)) {
                     passed++;
                     score += c.points();
                 } else {
                     submissions.addResult(submissionId, c.id(), c.ordinal(), verdict,
-                            (int) r.timeMs(), r.memoryKb(),
+                            (int) effective, r.memoryKb(),
                             preview(r.stdout()), preview(r.stderr()), 0);
                     verdicts.add(verdict);
                     hub.publish(submissionId, "case", Map.of(
                             "ordinal", c.ordinal(),
                             "verdict", verdict,
-                            "timeMs", r.timeMs(),
+                            "timeMs", effective,
                             "passed", passed,
                             "total", cases.size()));
                     continue;
                 }
                 submissions.addResult(submissionId, c.id(), c.ordinal(), "AC",
-                        (int) r.timeMs(), r.memoryKb(), preview(r.stdout()), preview(r.stderr()), c.points());
+                        (int) effective, r.memoryKb(), preview(r.stdout()), preview(r.stderr()), c.points());
                 hub.publish(submissionId, "case", Map.of(
                         "ordinal", c.ordinal(),
                         "verdict", "AC",
-                        "timeMs", r.timeMs(),
+                        "timeMs", effective,
                         "passed", passed,
                         "total", cases.size()));
             }
@@ -190,7 +201,27 @@ public class JudgeEngine {
         });
     }
 
-    private String classify(ExecResult r, String expected) {
+    /** Fuse headroom: container boot in docker mode, process spawn in local mode. */
+    private int allowanceMs() {
+        JudgexProps.Sandbox sb = props.sandbox();
+        int configured = sandbox.container() ? sb.startupAllowanceMs() : sb.localStartupAllowanceMs();
+        return Math.max(0, configured);
+    }
+
+    /**
+     * Time to show the user. A run cut by the fuse never finished, so its own runtime is
+     * unknown; the honest number is the limit it certainly exceeded, not the fuse delay
+     * (limit + boot headroom), which would credit the container's boot to the program.
+     * Output overflow is different: the process drowned quickly and the wall clock says when.
+     */
+    private static long shownMs(ExecResult r, int limitMs) {
+        if (r.runMs() < 0 && r.timedOut()) {
+            return r.outputOverflow() ? r.timeMs() : limitMs;
+        }
+        return r.effectiveMs();
+    }
+
+    private String classify(ExecResult r, String expected, int limitMs) {
         if (r.error() != null) {
             return "SYSTEM_ERROR";
         }
@@ -199,7 +230,14 @@ public class JudgeEngine {
         if (r.outputOverflow()) {
             return "OLE";
         }
-        if (r.timedOut()) {
+        if (r.runMs() < 0 && r.timedOut()) {
+            // The fuse cut the run before the program stamped its end: the runtime is unknown
+            // and the process never returned, which is a genuine timeout.
+            return "TLE";
+        }
+        // Only the program's own time counts. The small tolerance absorbs scheduling jitter and
+        // the wrapper's own fork/exec, not container boot.
+        if (r.effectiveMs() > limitMs + JITTER_TOLERANCE_MS) {
             return "TLE";
         }
         if (r.exitCode() != 0) {

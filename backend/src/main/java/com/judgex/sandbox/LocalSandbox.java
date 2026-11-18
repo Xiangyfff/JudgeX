@@ -123,11 +123,15 @@ public class LocalSandbox implements SandboxRunner {
 
         long elapsed = (System.nanoTime() - start) / 1_000_000;
         int exit = finished ? process.exitValue() : -1;
+        // The process is started directly here, so its wall clock IS its runtime. When the fuse
+        // kills it the true runtime is unknown: report -1 and let the caller judge it as a timeout.
+        long runMs = finished ? elapsed : -1;
         return new ExecResult(
                 exit,
                 out.toString(StandardCharsets.UTF_8),
                 err.toString(StandardCharsets.UTF_8),
                 elapsed,
+                runMs,
                 0,
                 !finished,
                 overflow.get(),

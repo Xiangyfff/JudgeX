@@ -5,6 +5,7 @@ backend/src/main/resources/static/
 
 # runtime data (sandbox work dirs)
 backend/data/
+data/
 
 # local tooling
 tmp/

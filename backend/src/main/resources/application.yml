@@ -72,6 +72,12 @@ judgex:
     run-as-user: ${JUDGEX_SANDBOX_USER:65534:65534}
     # Blank = use the profile packaged from docker/runner/seccomp.json.
     seccomp-profile: ${JUDGEX_SECCOMP_PROFILE:}
+    # The outer timer is a fuse, not a verdict: TLE is decided from the runtime measured inside
+    # the sandbox, so booting the container is never charged to the submission. The fuse only
+    # has to be comfortably longer than limit + startup, or a slow boot would kill correct runs.
+    startup-allowance-ms: ${JUDGEX_SANDBOX_STARTUP_ALLOWANCE_MS:3000}
+    # Local mode starts the process directly; it needs far less headroom.
+    local-startup-allowance-ms: ${JUDGEX_SANDBOX_LOCAL_STARTUP_ALLOWANCE_MS:500}
   limits:
     max-source-bytes: 65536
     max-active-per-user: 1
