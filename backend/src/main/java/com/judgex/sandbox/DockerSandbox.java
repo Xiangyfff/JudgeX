@@ -8,6 +8,7 @@ import org.springframework.stereotype.Component;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -16,17 +17,27 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * Container sandbox: no network, read-only rootfs, tmpfs scratch, capped memory,
- * CPU and pids. This is the runner we WANT in production; the local one exists so
- * the project runs on a laptop without Docker Desktop.
+ * CPU and pids, dropped capabilities, a whitelist-free seccomp profile that only
+ * denies the dangerous syscalls (so JVM, Node and Python keep working), and the
+ * program itself runs as nobody instead of root.
  */
 @Component
 public class DockerSandbox implements SandboxRunner {
 
     private static final Logger log = LoggerFactory.getLogger(DockerSandbox.class);
 
+    /** Packaged into the jar from docker/runner/seccomp.json at build time. */
+    private static final String SECCOMP_RESOURCE = "/sandbox/seccomp.json";
+
+    /** One file may not exceed 64 MiB: /work is a host bind mount with no quota. */
+    private static final long MAX_FILE_BYTES = 64L * 1024 * 1024;
+
     private final JudgexProps props;
     private volatile Boolean cachedAvailable;
     private volatile long checkedAt;
+    /** null = not resolved yet, empty = unavailable, otherwise an absolute path. */
+    private volatile String preparedSeccomp;
+
 
     public DockerSandbox(JudgexProps props) {
         this.props = props;
@@ -79,9 +90,27 @@ public class DockerSandbox implements SandboxRunner {
                 "--cpus", "1.0",
                 "--pids-limit", "64",
                 "--cap-drop", "ALL",
-                "--security-opt", "no-new-privileges",
+                "--security-opt", "no-new-privileges:true",
                 "--read-only",
+                // No /dev/shm: nothing here needs shared memory, and it removes a
+                // writable, executable-friendly region from the container.
+                "--ipc", "none",
                 "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m",
+                "--ulimit", "nofile=64:64",
+                "--ulimit", "core=0",
+                "--ulimit", "fsize=" + MAX_FILE_BYTES
+        ));
+        String user = props.sandbox().runAsUser();
+        if (user != null && !user.isBlank()) {
+            docker.add("--user");
+            docker.add(user);
+        }
+        String seccomp = seccompProfile();
+        if (seccomp != null) {
+            docker.add("--security-opt");
+            docker.add("seccomp=" + seccomp);
+        }
+        docker.addAll(List.of(
                 "-v", workDir.toAbsolutePath() + ":/work:rw",
                 "-w", "/work",
                 "-e", "HOME=/tmp",
@@ -187,6 +216,53 @@ public class DockerSandbox implements SandboxRunner {
             log.debug("docker kill {} failed: {}", containerName, e.toString());
         }
         p.destroyForcibly();
+    }
+
+    /**
+     * Absolute path of the seccomp profile handed to the Docker CLI. Docker on Windows
+     * reads this file client-side, so a Windows path is exactly what it needs.
+     */
+    private String seccompProfile() {
+        String prepared = preparedSeccomp;
+        if (prepared == null) {
+            synchronized (this) {
+                if (preparedSeccomp == null) {
+                    preparedSeccomp = resolveSeccomp();
+                }
+                prepared = preparedSeccomp;
+            }
+        }
+        return prepared.isEmpty() ? null : prepared;
+    }
+
+    private String resolveSeccomp() {
+        String configured = props.sandbox().seccompProfile();
+        if (configured != null && !configured.isBlank()) {
+            Path candidate = Path.of(configured).toAbsolutePath();
+            if (Files.isRegularFile(candidate)) {
+                log.info("docker sandbox uses seccomp profile {}", candidate);
+                return candidate.toString();
+            }
+            log.warn("configured seccomp profile {} is missing; using the bundled profile", candidate);
+        }
+        try (InputStream in = DockerSandbox.class.getResourceAsStream(SECCOMP_RESOURCE)) {
+            if (in == null) {
+                log.error("bundled seccomp profile {} is missing; containers keep Docker's default profile",
+                        SECCOMP_RESOURCE);
+                return "";
+            }
+            byte[] json = in.readAllBytes();
+            // Docker wants a path, not the content, and every run rebuilds the argument
+            // list, so materialise it once in the temp dir (also outside the read-only judge dirs).
+            Path target = Path.of(System.getProperty("java.io.tmpdir"), "judgex-seccomp.json")
+                    .toAbsolutePath();
+            Files.write(target, json);
+            log.info("docker sandbox uses bundled seccomp profile {} ({} bytes)", target, json.length);
+            return target.toString();
+        } catch (IOException e) {
+            log.error("could not prepare the seccomp profile: {}", e.toString());
+            return "";
+        }
     }
 
     public void logFallback() {

@@ -113,16 +113,32 @@ Worker 循环（事件驱动，2s 兜底）:
 | 读宿主文件 | 工作目录隔离，但**不阻止**读绝对路径 | 只读根 + 仅挂载工作目录，实测读 `win.ini` 报 `FileNotFoundError` |
 | 写宿主文件 | 只写自己的临时目录 | `--read-only`，实测写 `/` 报 `Read-only file system`；`/tmp` 是 tmpfs |
 | 联网 | **不阻止** | `--network none`，实测连本机 3306 被拒 |
-| 提权 / 逃逸 | 不阻止（同用户态） | `--cap-drop ALL` + `no-new-privileges`；**仍是 root，尚未配置 user namespace 与 seccomp profile** |
+| 提权 / 逃逸 | 不阻止（同用户态） | 容器内非 root（`--user 65534:65534`）+ `--cap-drop ALL` + `no-new-privileges:true`；挂载、命名空间、模块加载类调用被 seccomp 拒绝 |
+| 容器内提权 / 危险系统调用 | 不阻止 | seccomp 拒绝清单 19 条（`mount`/`unshare`/`setns`/`clone` 的 8 个命名空间标志/`clone3`/`ptrace`/`keyctl`/`bpf`/`perf_event_open`/`io_uring_*` 等）。实测 `unshare(CLONE_NEWUSER)`、`mount`、`ptrace(ATTACH)`、`keyctl(GET_KEYRING_ID)`、`clone(CLONE_NEWUSER)` 全部返回 `EPERM(1)`；`clone3` 返 `ENOSYS(38)` 让 glibc 回落，`pthread`/fork 不受影响 |
 | 输出洪水 | 读取线程 64KB 截断，标记 `OLE` | 同左（管道在宿主侧截断），实测 360～504 ms 判 `OLE` |
 
-**这是一份诚实的边界表**：`local` 模式适合"自己的学生写自己的作业"，不适合公网；`docker` 模式把文件系统、网络、内存、pid 四块补齐了，但还没解决"容器内 root + 无 seccomp"这一层。
+**这是一份诚实的边界表**：`local` 模式适合"自己的学生写自己的作业"，不适合公网；`docker` 模式把文件系统、网络、内存、pid 四块补齐了，容器内以非 root 运行并套 seccomp 拒绝清单，"容器内 root + 无 seccomp"这一层已经补上。仍缺 userns-remap、镜像 digest 固定、`/work` 配额与 blkio 限制，清单见本章末尾「残余风险」。
 
-表里的每一行都有实测对应：`local` 模式下提交的代码读到了 `C:\Windows\win.ini`、连上了本机 3306；同样的代码在 `docker` 模式下分别报 `FileNotFoundError` 与连接失败。完整数据（7 种判定、边界值、隔离性反向测试、容器模式 17 个用例、并发与清理）见 [`SANDBOX-TESTS.md`](SANDBOX-TESTS.md)。
+表里的每一行都有实测对应：`local` 模式下提交的代码读到了 `C:\Windows\win.ini`、连上了本机 3306；同样的代码在 `docker` 模式下分别报 `FileNotFoundError` 与连接失败。完整数据（7 种判定、边界值、隔离性反向测试、容器模式 16 个用例、并发与清理）见 [`SANDBOX-TESTS.md`](SANDBOX-TESTS.md)。
 
 容器模式落地时踩到的四个坑也记录在案：`SandboxRouter` 没有转发 `container()`，导致容器里执行宿主机绝对路径（所有提交 CE）；超时只杀 `docker run` 客户端、容器与管道还活着，一个 `while(true)` 能把提交永久挂在 RUNNING；输出超限被判成 TLE 而不是 OLE；容器 OOM（退出码 137）被判成 RE。
 
 代码里的取舍：**先做"一定会发生"的防护（超时、内存、输出），再做"可能发生"的防护（文件、网络、提权）**。前者不做，平台五分钟就被一个 `while(true)` 打死；后者不做，是安全债，要在部署前还。
+
+### 残余风险（2026-11-18 加固后）
+
+非 root + seccomp 补上了"容器内提权"这一层，但没有把容器变成强隔离。按上线影响排序：
+
+1. **内核共享**：所有容器共享 Docker Desktop 的 WSL2 内核（6.18.58.1-microsoft-standard-WSL2），内核 0day 仍可逃逸；没有 Kata/gVisor 这类强隔离运行时。
+2. **无 userns-remap**：容器没有独立用户命名空间映射，daemon 也未启用 userns-remap；宿主机上的 uid 映射仍是默认的。
+3. **镜像风险**：`judgex-runner:latest`（本地 `sha256:d407152bfc01`，2026-11-12 构建，约 772 MB）基础镜像未固定 digest，未做 CVE 扫描与最小化，含完整 JDK/Node/Python 工具链。
+4. **工作目录无配额**：`/work` 是宿主 bind mount，单文件被 `ulimit fsize=64MB` 限制，但总磁盘与 inode 没有配额；宿主上该目录是 0777，本机其他进程可读写。
+5. **seccomp 是拒绝清单而非白名单**：默认放行，`execve`、`fork`、`memfd_create`、`socketpair`、`chmod` 等仍然可用，AF_UNIX 与共享内存替代路径未封。
+6. **判定竞态**：时限含容器启动时间，高负载下输出洪泛可能先撞 2 秒判 `TLE` 而不是 `OLE`（实测出现过一次 2088 ms 的 TLE）。安全上没问题，结果稳定性上有瑕疵。
+7. **资源限制不完整**：没有 blkio 与总磁盘配额；CPU/内存/pids/单文件已限。
+8. **`/proc` 与 daemon**：容器内仍可读自身 `/proc`；Docker daemon 未挂 `docker.sock` 给容器，但 daemon 本身以高权限运行在宿主，属平台风险。
+9. **工作目录生命周期**：异常崩溃可能残留 `sub-<id>` 目录（本轮验证未出现，正常结束会删除）。
+10. **性能复测受环境限制**：本轮宿主有游戏占 486% CPU 且内存吃紧，未取得安静状态样本；加固本身开销 ≈0，400→800 ms 的翻倍来自容器启动，待机器空闲时复测确认回落。
 
 ---
 

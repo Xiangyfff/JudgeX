@@ -105,6 +105,20 @@
     </dependencies>
 
     <build>
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+            </resource>
+            <!-- The sandbox profile belongs with the image it was written for; packaging it
+                 into the jar lets the judge find it regardless of the working directory. -->
+            <resource>
+                <directory>${project.basedir}/../docker/runner</directory>
+                <includes>
+                    <include>seccomp.json</include>
+                </includes>
+                <targetPath>sandbox</targetPath>
+            </resource>
+        </resources>
         <plugins>
             <plugin>
                 <groupId>org.springframework.boot</groupId>

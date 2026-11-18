@@ -67,6 +67,11 @@ judgex:
     max-output-bytes: 65536
     work-dir: ${JUDGEX_WORK_DIR:./data/work}
     docker-image: judgex-runner:latest
+    # Judge programs run as nobody, never as root. On Windows the Docker Desktop bind
+    # mount is world-writable, so the compile step can still write into /work.
+    run-as-user: ${JUDGEX_SANDBOX_USER:65534:65534}
+    # Blank = use the profile packaged from docker/runner/seccomp.json.
+    seccomp-profile: ${JUDGEX_SECCOMP_PROFILE:}
   limits:
     max-source-bytes: 65536
     max-active-per-user: 1

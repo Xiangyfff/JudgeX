@@ -35,7 +35,15 @@ public record JudgexProps(
             String mode,
             int maxOutputBytes,
             String workDir,
-            String dockerImage
+            String dockerImage,
+            /**
+             * uid:gid the judge program runs as inside the container. Empty means Docker's
+             * default (root), which is only a fallback for hosts whose bind mounts nobody
+             * cannot write to.
+             */
+            String runAsUser,
+            /** Explicit seccomp profile; blank uses the profile bundled in the jar. */
+            String seccompProfile
     ) {
     }
 
