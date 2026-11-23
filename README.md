@@ -234,6 +234,19 @@ java -jar target/judgex-backend-1.0.0.jar
 | 本地 broker 起不来，`store.log` 报 `InaccessibleObjectException: jdk.internal.ref.Cleaner` | JDK 17 下 RocketMQ 4.9.7 需要额外加 `--add-opens java.base/jdk.internal.ref=ALL-UNNAMED`（4.9.x 自带脚本用的是已移除的 CMS，也要自己拼 java 命令） |
 | 沙箱里创建子进程报 `CreatePipe error=5` | 权限受限，需要以具备进程创建权限的方式运行后端 |
 
+## 部署上线
+
+单机部署的完整步骤、安全清单与运维命令见 [docs/DEPLOY.md](docs/DEPLOY.md)。仓库里已经备好部署文件：
+
+| 文件 | 用途 |
+| :--- | :--- |
+| `deploy/judgex.env.example` | 环境变量模板：数据库、JWT 密钥、初始账号、沙箱模式 |
+| `deploy/judgex.service` | systemd 单元：开机自启、崩溃重启、最小权限 |
+| `deploy/nginx.conf` | 同源托管前端 + 反代 `/api`，含 SSE 必需的三行配置 |
+| `deploy/deploy.sh` | 更新脚本：拉代码 → 构建 → 重启 → 健康检查 |
+
+线上与本地只有三处必须不同：数据库连接、`JUDGEX_JWT_SECRET`、以及 `JUDGEX_SANDBOX=docker`。后端启动时会自检，检测到"本机沙箱"或"默认密钥"会在日志里打 WARN。
+
 ## 目录结构
 
 ```text

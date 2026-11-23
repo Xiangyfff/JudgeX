@@ -49,6 +49,11 @@ judgex:
   # HS256 secret. Replace in production.
   jwt-secret: ${JUDGEX_JWT_SECRET:judgex-dev-secret-please-change-in-production-0123456789}
   token-ttl-hours: 12
+  # Origins allowed to call /api from another origin. A same-origin deployment (Nginx
+  # serves the SPA and proxies /api) never triggers CORS at all; this only matters for
+  # split deployments. Comma separated. Wildcards are ignored when credentials are on.
+  cors:
+    allowed-origins: ${JUDGEX_CORS_ORIGINS:http://127.0.0.1:*,http://localhost:*}
   # How many judge threads this node runs. Each thread = one worker slot.
   worker:
     id: ${JUDGEX_WORKER_ID:node-1}
@@ -81,7 +86,13 @@ judgex:
   limits:
     max-source-bytes: 65536
     max-active-per-user: 1
-    submit-rate-per-minute: 20
+    submit-rate-per-minute: ${JUDGEX_SUBMIT_RATE:20}
+  # First boot only: writes the demo users and problems when those tables are empty.
+  # On a public install either disable this or supply real passwords through env vars.
+  seed:
+    enabled: ${JUDGEX_SEED_ENABLED:true}
+    admin-password: ${JUDGEX_ADMIN_PASSWORD:admin123}
+    student-password: ${JUDGEX_STUDENT_PASSWORD:student123}
   redis:
     # Redis only ever holds state we can rebuild (counters, presence, ranking).
     # Tasks and verdicts stay in the database, so a Redis outage degrades instead of corrupting.

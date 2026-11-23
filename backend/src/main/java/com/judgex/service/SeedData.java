@@ -6,6 +6,7 @@ import com.judgex.repo.UserMapper;
 import com.judgex.web.dto.Dto;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.stereotype.Component;
@@ -21,6 +22,16 @@ public class SeedData implements ApplicationRunner {
     private final UserMapper users;
     private final ProblemMapper problems;
 
+    /** Bootstrapping switch: a public install should seed once with real passwords, or not at all. */
+    @Value("${judgex.seed.enabled:true}")
+    private boolean enabled;
+
+    @Value("${judgex.seed.admin-password:admin123}")
+    private String adminPassword;
+
+    @Value("${judgex.seed.student-password:student123}")
+    private String studentPassword;
+
     public SeedData(UserMapper users, ProblemMapper problems) {
         this.users = users;
         this.problems = problems;
@@ -28,11 +39,16 @@ public class SeedData implements ApplicationRunner {
 
     @Override
     public void run(ApplicationArguments args) {
+        if (!enabled) {
+            log.info("demo seeding disabled (judgex.seed.enabled=false)");
+            return;
+        }
         if (users.count() == 0) {
-            users.insert("admin", PasswordHasher.hash("admin123"), "平台管理员", "ADMIN");
-            users.insert("student", PasswordHasher.hash("student123"), "林同学", "USER");
-            users.insert("chen", PasswordHasher.hash("student123"), "陈同学", "USER");
-            log.info("seeded demo users: admin/admin123, student/student123");
+            users.insert("admin", PasswordHasher.hash(adminPassword), "平台管理员", "ADMIN");
+            users.insert("student", PasswordHasher.hash(studentPassword), "林同学", "USER");
+            users.insert("chen", PasswordHasher.hash(studentPassword), "陈同学", "USER");
+            // Never log the passwords themselves; they come from the environment.
+            log.info("seeded demo users: admin, student, chen (passwords from judgex.seed.*)");
         }
         if (problems.count() == 0) {
             seedProblems();

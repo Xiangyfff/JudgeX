@@ -1,0 +1,28 @@
+[Unit]
+Description=JudgeX judge platform
+After=network-online.target mysql.service redis-server.service docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=judgex
+Group=judgex
+WorkingDirectory=/opt/judgex/backend
+EnvironmentFile=/etc/judgex/judgex.env
+# SerialGC: small heap, short lives, and one less knob to tune on a 2 vCPU box.
+ExecStart=/usr/bin/java -Xms256m -Xmx512m -XX:+UseSerialGC -jar /opt/judgex/backend/target/judgex-backend-1.0.0.jar
+Restart=always
+RestartSec=5
+SuccessExitStatus=143
+# The judging containers are children of `docker run` spawned by this process.
+KillMode=mixed
+TimeoutStopSec=30
+
+# Hardening. NoNewPrivileges stops a compromised judge from ever gaining setuid powers;
+# PrivateTmp keeps its /tmp out of the host's.
+NoNewPrivileges=true
+PrivateTmp=true
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
