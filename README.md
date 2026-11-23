@@ -160,7 +160,9 @@ java -jar target/judgex-backend-1.0.0.jar
 | :--- | :--- | :--- |
 | `student` | `student123` | 学生 |
 | `chen` | `student123` | 学生（用于对比"全部提交"） |
-| `admin` | `admin123` | 管理员，多一个题库管理页 |
+| `admin` | 由 `JUDGEX_ADMIN_PASSWORD` 指定 | 管理员，多一个题库管理页 |
+
+管理员密码不再写死在代码里：首次启动时 `SeedData` 用 `judgex.seed.admin-password`（环境变量 `JUDGEX_ADMIN_PASSWORD`）写入，本地默认值与部署时改为强密码都走这一个入口。学生账号同理，由 `JUDGEX_STUDENT_PASSWORD` 控制；不想要演示账号就把 `JUDGEX_SEED_ENABLED` 设为 `false`。
 
 首次启动时 Flyway 执行 `db/migration` 下的脚本建表（版本记录在 `flyway_schema_history`），随后写入 6 道题、每题 5 个测试点。想彻底重置：`DROP DATABASE judgex` 后重新建库。
 
