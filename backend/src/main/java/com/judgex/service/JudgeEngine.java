@@ -214,14 +214,14 @@ public class JudgeEngine {
      * (limit + boot headroom), which would credit the container's boot to the program.
      * Output overflow is different: the process drowned quickly and the wall clock says when.
      */
-    private static long shownMs(ExecResult r, int limitMs) {
+    static long shownMs(ExecResult r, int limitMs) {
         if (r.runMs() < 0 && r.timedOut()) {
             return r.outputOverflow() ? r.timeMs() : limitMs;
         }
         return r.effectiveMs();
     }
 
-    private String classify(ExecResult r, String expected, int limitMs) {
+    String classify(ExecResult r, String expected, int limitMs) {
         if (r.error() != null) {
             return "SYSTEM_ERROR";
         }
@@ -266,7 +266,7 @@ public class JudgeEngine {
                 || stderr.contains("std::bad_alloc");
     }
 
-    private static String dominant(List<String> verdicts) {
+    static String dominant(List<String> verdicts) {
         List<String> priority = List.of("SYSTEM_ERROR", "TLE", "MLE", "OLE", "RE", "WA");
         for (String p : priority) {
             if (verdicts.contains(p)) {
