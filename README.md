@@ -23,6 +23,12 @@
 
 </div>
 
+> **在线演示：<http://8.148.15.36>**
+>
+> 学生账号 `student` / `student123`；管理员账号 `admin`，密码不入库，由部署时的 `JUDGEX_ADMIN_PASSWORD` 注入。
+>
+> 演示机是 2 核 2 GB 的轻量服务器（Ubuntu 24.04 + MySQL 8 + Redis 7 + Docker），判题并发 1、MQ 关闭，提交高峰期会排队，属正常现象。部署过程与全部踩坑记录见 [docs/DEPLOY.md](docs/DEPLOY.md)。
+
 ## 项目预览
 
 **题库与进度**
@@ -294,7 +300,7 @@ JudgeX
 
 - `local` 沙箱是进程级隔离：防得住超时、输出洪水与误写文件，防不住读内存、扫内网、提权。生产环境应切到 `docker`。
 - 沙箱的行为有实测数据，见 [`docs/SANDBOX-TESTS.md`](docs/SANDBOX-TESTS.md)：两档沙箱同一组用例各跑一遍。`local` 模式的真实短板是——提交的代码能读到 `C:\Windows\win.ini`、能连上本机 3306；`docker` 模式下这两项都被挡住（RE），往根目录写文件报 `Read-only file system`，Python 撑爆 256 MB 被 OOM kill 判 `MLE`。代价是每条用例多 300～450 毫秒容器启动（宿主有负载时会到 700～800 毫秒），5 个用例的提交从 0.7 秒变成 3～5 秒。
-- 容器镜像 `judgex-runner:latest`（约 772 MB）由 [`docker/runner/Dockerfile`](docker/runner/Dockerfile) 用三份官方镜像多阶段拷贝而成（JDK 17 + Python 3.11 + Node 20）。镜像里**没有 g++**，容器模式下 C++ 提交会 CE。容器档已加固：非 root（`--user 65534:65534`）、19 条 seccomp 拒绝清单、`--cap-drop ALL`、只读根、`--ipc none` 与 ulimit 全部生效，「容器内仍是 root」这条已修复。剩余的已知风险（内核共享、无 userns-remap、镜像未固定 digest、`/work` 无配额等）列在 [`docs/SANDBOX-TESTS.md`](docs/SANDBOX-TESTS.md) 第 7.6 节。
+- 容器镜像 `judgex-runner:latest` 由 [`docker/runner/Dockerfile`](docker/runner/Dockerfile) 用三份官方镜像多阶段拷贝而成（JDK 17 + Python 3.11 + Node 20），再补一层 `apt` 装 `g++`，所以容器模式下 Java / Python / C++ 三门都可用（Node 仍取决于宿主是否装了 node：语言清单以宿主探测为准）。容器档已加固：非 root（`--user` 取部署机上应用自己的 uid:gid，Debian 镜像里没有 65534 的写权限）、19 条 seccomp 拒绝清单、`--cap-drop ALL`、只读根、`--ipc none` 与 ulimit 全部生效。剩余的已知风险（内核共享、无 userns-remap、镜像未固定 digest、`/work` 无配额等）列在 [`docs/SANDBOX-TESTS.md`](docs/SANDBOX-TESTS.md) 第 7.6 节。
 - local 模式下只有 Java 与 Node 能真正压住堆内存（堆上限取自题目配置，`-Xmx` / `--max-old-space-size`）；Python、C++ 在 Windows 上没有等价的命令旋钮，要硬限制得用 `docker` 的 `--memory`。两种模式都拿不到准确的内存峰值，页面显示 `—` 而不是编造数字；`MLE` 靠运行时自报 OOM（本机）或容器退出码 137（容器）。
 - 调度靠"延时闹钟 + 兜底轮询"，不靠扫表。多节点下 CAS 仍然安全，但每个节点都会做自己的安全扫描，重复回收由条件更新兜住；租约闹钟由认领任务的 Worker 自己发，没有做全局对账。
 - 本机 RocketMQ 4.9.7 实测（加了发送/接收时间戳后逐段量）：派活消息**从发出到调度线程被叫醒 5～10 毫秒**（发送 3ms + broker 到消费端 5ms + 抢到任务 6ms），空闲 45 秒后第一条同样如此；提交到出结果 0.7～0.8 秒，这段时间基本都花在判题本身（5 个用例 × 约 130 毫秒进程启动），不是消息延迟。冷启动后约 10 秒内客户端还在建连，这期间的派活消息会丢，由 2 秒兜底轮询接住（首次提交约 2.7 秒出结果）；把租约强制置过期后，延时闹钟 4 秒内回收成功。

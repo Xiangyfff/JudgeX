@@ -10,7 +10,9 @@ Group=judgex
 WorkingDirectory=/opt/judgex/backend
 EnvironmentFile=/etc/judgex/judgex.env
 # SerialGC: small heap, short lives, and one less knob to tune on a 2 vCPU box.
-ExecStart=/usr/bin/java -Xms256m -Xmx512m -XX:+UseSerialGC -jar /opt/judgex/backend/target/judgex-backend-1.0.0.jar
+# java.io.tmpdir must sit outside the private /tmp: the sandbox bind-mounts a clock
+# script from the JVM temp dir, and docker (outside this namespace) cannot see it.
+ExecStart=/usr/bin/java -Xms256m -Xmx512m -XX:+UseSerialGC -Djava.io.tmpdir=/var/lib/judgex/tmp -jar /opt/judgex/backend/target/judgex-backend-1.0.0.jar
 Restart=always
 RestartSec=5
 SuccessExitStatus=143

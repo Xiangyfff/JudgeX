@@ -102,7 +102,7 @@
 
 镜像 `judgex-runner:latest` 由三份官方镜像多阶段拷贝组成：`eclipse-temurin:17-jdk` 的 JDK、`node:20-slim` 的 node、`python:3.11-slim` 的 python3，统一放在 Debian bookworm 基础上（`docker/runner/Dockerfile`）。之所以不直接 `apt install`，是因为本机只能访问镜像仓库代理，容器内 `apt-get` / `apk` 全部失败（`APT_FAILED` / `APK_FAILED`）。
 
-镜像内运行时：Python 3.11.18、Node v20.20.2、OpenJDK 17.0.21、`/opt/java/openjdk/bin/javac`。**镜像里没有 g++，容器模式下 C++ 提交会编译失败**，本轮只覆盖 Java / Python / JavaScript。
+镜像内运行时：Python 3.11.18、Node v20.20.2、OpenJDK 17.0.21、`/opt/java/openjdk/bin/javac`。**本节的镜像里没有 g++，容器模式下 C++ 提交会编译失败**，所以这一轮只覆盖 Java / Python / JavaScript；后来在 Dockerfile 末尾补了一层 `apt-get install g++`（境外源换阿里云镜像后 1 分半装完），C++ 在 Linux 部署机上的复测见第十节。
 
 本轮（加固前）每个用例的执行参数：`--network none --memory 256m --memory-swap 256m --cpus 1.0 --pids-limit 64 --cap-drop ALL --security-opt no-new-privileges --read-only --tmpfs /tmp:rw,noexec,nosuid,size=64m`，工作目录以 `-v` 挂到 `/work`，容器内是 root、套 Docker 默认 seccomp。加固后的参数、实测与性能复测见下一节。
 
@@ -258,8 +258,8 @@ clone(NEWUSER):   rc=-1 errno=1 (EPERM)
 ## 八、仍然存在的限制
 
 1. **本机模式不隔离文件系统和网络**：实测能读 `C:\Windows\win.ini`、能连本机 3306。要挡这两项必须用容器模式。
-2. **容器模式已非 root + seccomp，但仍有残余风险**：容器内以 `65534:65534` 运行、套 19 条拒绝规则的 seccomp profile，`--cap-drop ALL`、只读根、`no-new-privileges`、`--ipc none` 与 ulimit 全部生效。仍缺 userns-remap、镜像 digest 固定、`/work` 配额、blkio 限制；完整清单见 7.6。
-3. **容器模式没有 C++**：镜像里没有 g++，`cpp` 提交在容器模式下编译失败；本机模式可用（MinGW）。
+2. **容器模式已非 root + seccomp，但仍有残余风险**：容器内以应用的 uid:gid 运行（Linux 上是 `996:988`；容器里的 root 在 `--cap-drop ALL` 之后没有 DAC 覆写权限，反而写不了 `/work`）、套 19 条拒绝规则的 seccomp profile，`--cap-drop ALL`、只读根、`no-new-privileges`、`--ipc none` 与 ulimit 全部生效。仍缺 userns-remap、镜像 digest 固定、`/work` 配额、blkio 限制；完整清单见 7.6。
+3. **容器模式的 C++ 依赖镜像自带的 g++**：初版镜像没有 g++，`cpp` 在容器模式下编译失败；补装之后 Linux 部署机上 C++ 编译与运行都通过（见第十节）。Node 仍取决于宿主是否装了 node，因为语言清单来自宿主探测。
 4. **Python / C++ 在本机模式没有内存上限**：Windows 没有 `rlimit`，本机模式只有 Java（`-Xmx`）和 Node（`--max-old-space-size`）能按题目配置压住；容器模式对四种语言都靠 `--memory` 统一限制。
 5. **内存峰值一栏仍是 `—`**：两种模式都没有采集实际 RSS，MLE 靠运行时自报 OOM（本机）或退出码 137（容器）。
 6. **判定耗时仍受负载影响，但已不计入判定**：同一个 a+b，容器模式下程序自身耗时约 45～85 ms（Java 含 JVM 启动约 130～160 ms），宿主忙时这段耗时会轻微上浮；容器启动（0.6～1.2 s）单独给宽限、不进时限，也不再写进 `time_ms`（见第九节）。报告里的端到端毫秒数只用于横向比较。
@@ -346,4 +346,27 @@ AC 10/10
 - **判题可信**：AC / WA / TLE / OLE / RE / CE / MLE 七种判定在两种模式下都有实测样本，时限与输出上限卡在毫秒级，边界值不会误判。
 - **资源可控**：超时、超输出、超内存都能被杀掉；进程树能杀干净；容器有名字，超时杀掉的是容器本身而不是壳；工作目录会清理。
 - **两种模式的定位**：`local-process` 只适合本机开发与演示，它保证的是「判题结果可信」，不是「宿主机安全」；`docker` 才补齐了文件系统、网络、内存三块隔离，代价是每用例多 300～450 ms。
-- **还差的口子**：容器内 C++（镜像没有 g++）、真实内存峰值采集、userns-remap 与镜像 digest 固定、`/work` 配额与 blkio 限制。前两项影响功能与观测，后三项是安全债；完整清理见 7.6。
+- **还差的口子**：真实内存峰值采集、userns-remap 与镜像 digest 固定、`/work` 配额与 blkio 限制。前一项影响观测，后两项是安全债；完整清理见 7.6。
+
+## 十、Linux 服务器复测（2 核 2 GB）
+
+环境：阿里云轻量 2C2G，Ubuntu 24.04，可分配内存 1613 MB；JDK 17.0.21.1、MySQL 8.0.46、Redis 7.0.15、Docker 29.1.3；判题并发 1，RocketMQ 关闭，容器以 `996:988` 运行。镜像补装了 g++（Debian 13，`g++ 14.2`）。
+
+| 提交 | 端到端 | 逐用例 | 判定 |
+| :--- | ---: | :--- | :--- |
+| Java 17 A+B | 3.9 s | 5 × AC | AC 100 |
+| Python 3 A+B | 2.2 s | 5 × AC | AC 100 |
+| C++17 A+B | 2.2 s | 5 × AC | AC 100 |
+| `while True: pass` | 26.3 s | 5 × TLE（约 5 s/例） | TLE |
+
+隔离现场验证（提交 Python 主动试探）：
+
+| 试探 | 结果 |
+| :--- | :--- |
+| 读宿主 `/opt/judgex/judgex.jar` | `FileNotFoundError` |
+| 连 `127.0.0.1:3306` | `ConnectionRefusedError` |
+| 写 `/etc/judgex-pwn` | `Read-only file system` |
+| 列 `/` | 只看到容器自己的根（`.dockerenv`、`judgex-clock` 等） |
+| 跑完 `docker ps -a` | 0 个残留 |
+
+代价：每个用例多 1～3 秒容器启动，2 核机器上 5 个用例的 TLE 提交要 26 秒才出终态；1 核并发下这是可以接受的取舍，想要更快只能上容器池预热。
