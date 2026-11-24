@@ -94,7 +94,7 @@ sequenceDiagram
     participant API as Spring Boot
     participant DB as MySQL
     participant Worker as 判题 Worker
-    participant Box as 沙箱
+    participant Sandbox as 沙箱
 
     User->>Web: 写代码并提交
     Web->>API: 提交请求（带幂等键）
@@ -102,8 +102,8 @@ sequenceDiagram
     API-->>Web: 返回提交号，SSE 开始推送
 
     Worker->>DB: CAS 认领任务（租约 45s）
-    Worker->>Box: 编译并逐个用例执行
-    Box-->>Worker: 输出 / 超时 / 内存 / 溢出
+    Worker->>Sandbox: 编译并逐个用例执行
+    Sandbox-->>Worker: 输出 / 超时 / 内存 / 溢出
     Worker->>DB: 用例结果落库（唯一索引兜底）
     Worker-->>Web: SSE 推送 case 事件
     Worker->>DB: 终态与 outbox 同一事务提交
