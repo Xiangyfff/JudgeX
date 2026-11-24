@@ -18,6 +18,8 @@ interface FormState {
   timeLimitMs: number
   memoryLimitMb: number
   published: boolean
+  judgeMode: string
+  signature: string
 }
 
 const form = reactive<FormState>({
@@ -28,7 +30,9 @@ const form = reactive<FormState>({
   statement: '',
   timeLimitMs: 2000,
   memoryLimitMb: 256,
-  published: true
+  published: true,
+  judgeMode: 'STDIN',
+  signature: ''
 })
 
 const cases = ref<TestCaseView[]>([])
@@ -58,6 +62,8 @@ function applyDetail(detail: ProblemDetail) {
   form.timeLimitMs = detail.summary.timeLimitMs
   form.memoryLimitMb = detail.summary.memoryLimitMb
   form.published = detail.summary.published
+  form.judgeMode = detail.summary.judgeMode ?? 'STDIN'
+  form.signature = detail.summary.signature ?? ''
   cases.value = detail.cases.map((c) => ({ ...c }))
 }
 
@@ -79,6 +85,8 @@ function startNew() {
   form.timeLimitMs = 2000
   form.memoryLimitMb = 256
   form.published = true
+  form.judgeMode = 'STDIN'
+  form.signature = ''
   cases.value = [
     { id: 0, ordinal: 1, input: '', expectedOutput: '', points: 10, hidden: false }
   ]
@@ -114,7 +122,9 @@ async function save() {
       statement: form.statement,
       timeLimitMs: Number(form.timeLimitMs) || 2000,
       memoryLimitMb: Number(form.memoryLimitMb) || 256,
-      published: form.published
+      published: form.published,
+      judgeMode: form.judgeMode,
+      signature: form.judgeMode === 'FUNCTION' ? form.signature : null
     }
     const saved = await api.saveProblem(payload, selectedId.value ?? undefined)
     const id = saved.summary.id
@@ -240,6 +250,24 @@ onMounted(load)
                 <option :value="true">已发布</option>
                 <option :value="false">草稿</option>
               </select>
+            </label>
+          </div>
+
+          <div class="grid2">
+            <label class="field">
+              <span>判题模式</span>
+              <select v-model="form.judgeMode" class="input">
+                <option value="STDIN">标准输入（传统）</option>
+                <option value="FUNCTION">函数式（力扣式）</option>
+              </select>
+            </label>
+            <label class="field" v-if="form.judgeMode === 'FUNCTION'">
+              <span>函数签名</span>
+              <input
+                v-model="form.signature"
+                class="input mono"
+                placeholder="int[] twoSum(int[] nums, int target)"
+              />
             </label>
           </div>
 
@@ -389,6 +417,11 @@ h1 {
 }
 .span2 {
   grid-column: span 2;
+}
+.grid2 {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
 }
 .grid4 {
   display: grid;

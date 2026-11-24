@@ -23,7 +23,7 @@ public interface ProblemMapper {
      * a problem that says 1000 ms / 128 MB must actually be judged with 1000 ms / 128 MB.
      */
     record JudgeCase(long id, int ordinal, String input, String expectedOutput, int points,
-                     int timeLimitMs, int memoryLimitMb) {
+                     int timeLimitMs, int memoryLimitMb, String judgeMode, String signature) {
     }
 
     List<Dto.ProblemSummary> summaries(@Param("includeUnpublished") boolean includeUnpublished);
@@ -49,7 +49,9 @@ public interface ProblemMapper {
                   @Param("statement") String statement,
                   @Param("timeLimitMs") int timeLimitMs,
                   @Param("memoryLimitMb") int memoryLimitMb,
-                  @Param("published") boolean published);
+                  @Param("published") boolean published,
+                  @Param("judgeMode") String judgeMode,
+                  @Param("signature") String signature);
 
     int deleteCases(@Param("problemId") long problemId);
 
@@ -87,6 +89,8 @@ public interface ProblemMapper {
         row.put("timeLimitMs", r.timeLimitMs() == null ? 2000 : r.timeLimitMs());
         row.put("memoryLimitMb", r.memoryLimitMb() == null ? 256 : r.memoryLimitMb());
         row.put("published", r.published() == null || r.published());
+        row.put("judgeMode", normalizeMode(r.judgeMode()));
+        row.put("signature", blankToNull(r.signature()));
         insertRow(row);
         Object id = row.get("id");
         return id instanceof Number n ? n.longValue() : -1;
@@ -97,7 +101,18 @@ public interface ProblemMapper {
                 r.statement(),
                 r.timeLimitMs() == null ? 2000 : r.timeLimitMs(),
                 r.memoryLimitMb() == null ? 256 : r.memoryLimitMb(),
-                r.published() == null || r.published());
+                r.published() == null || r.published(),
+                normalizeMode(r.judgeMode()),
+                blankToNull(r.signature()));
+    }
+
+    /** Anything other than FUNCTION falls back to stdin judging; the engine branches on this. */
+    private static String normalizeMode(String raw) {
+        return "FUNCTION".equalsIgnoreCase(raw == null ? "" : raw.trim()) ? "FUNCTION" : "STDIN";
+    }
+
+    private static String blankToNull(String raw) {
+        return raw == null || raw.isBlank() ? null : raw.trim();
     }
 
     default void delete(long id) {

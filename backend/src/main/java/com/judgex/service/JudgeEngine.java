@@ -86,6 +86,24 @@ public class JudgeEngine {
             }
 
             String source = submissions.source(submissionId);
+            List<ProblemMapper.JudgeCase> cases = problems.judgeCases(row.problemId());
+            if (cases.isEmpty()) {
+                finish(submissionId, "SYSTEM_ERROR", 0, "problem has no test cases", 0);
+                return;
+            }
+            // Function-style problems ship only the solution class; the harness turns it into
+            // a program that reads one line of arguments and prints the return value.
+            ProblemMapper.JudgeCase first = cases.get(0);
+            if ("FUNCTION".equalsIgnoreCase(first.judgeMode())) {
+                String wrapped = FunctionHarness.wrap(row.language(), first.signature(), source);
+                if (wrapped == null) {
+                    finish(submissionId, "SYSTEM_ERROR", 0,
+                            "function-style judging is not supported for " + row.language()
+                                    + " (signature: " + first.signature() + ")", 0);
+                    return;
+                }
+                source = wrapped;
+            }
             workDir = Files.createDirectories(Path.of(props.sandbox().workDir(), "sub-" + submissionId));
             Files.writeString(workDir.resolve(lang.extension()), source, StandardCharsets.UTF_8);
 
@@ -104,12 +122,6 @@ public class JudgeEngine {
                     return;
                 }
                 hub.publish(submissionId, "compiled", Map.of("log", compileLog, "timeMs", compileTimeMs));
-            }
-
-            List<ProblemMapper.JudgeCase> cases = problems.judgeCases(row.problemId());
-            if (cases.isEmpty()) {
-                finish(submissionId, "SYSTEM_ERROR", 0, "problem has no test cases", 0);
-                return;
             }
 
             int passed = 0;

@@ -38,6 +38,37 @@ const templates: Record<string, string> = {
 }
 
 const summary = computed(() => problem.value?.summary ?? null)
+
+const isFunction = computed(() => summary.value?.judgeMode === 'FUNCTION')
+
+// 函数式题目只给签名：模板按签名生成，用户只填方法体。
+function signatureParts() {
+  const sig = summary.value?.signature
+  if (!sig) return null
+  const m = /^\s*([\w\[\]]+)\s+(\w+)\s*\((.*)\)\s*$/.exec(sig.trim())
+  if (!m) return null
+  const parts = m[3].trim() ? m[3].split(',').map((p) => p.trim().split(/\s+/)) : []
+  return {
+    ret: m[1],
+    name: m[2],
+    params: parts.filter((b) => b.length >= 2).map((b) => ({ type: b[0], name: b[1] }))
+  }
+}
+
+function templateFor(langId: string): string {
+  if (!isFunction.value) return templates[langId] ?? ''
+  const sig = signatureParts()
+  if (!sig) return templates[langId] ?? ''
+  if (langId === 'java') {
+    const args = sig.params.map((p) => `${p.type} ${p.name}`).join(', ')
+    return `class Solution {\n    public ${sig.ret} ${sig.name}(${args}) {\n        // 在这里写你的代码\n    }\n}\n`
+  }
+  if (langId === 'python') {
+    const args = sig.params.map((p) => `, ${p.name}`).join('')
+    return `class Solution:\n    def ${sig.name}(self${args}):\n        # 在这里写你的代码\n        pass\n`
+  }
+  return ''
+}
 const diffLabel: Record<string, string> = { EASY: '简单', MEDIUM: '中等', HARD: '困难' }
 const diffClass: Record<string, string> = { EASY: 'diff-easy', MEDIUM: 'diff-medium', HARD: 'diff-hard' }
 
@@ -77,7 +108,7 @@ async function load() {
     languages.value = langs
     const firstAvailable = langs.find((l) => l.available)?.id
     if (firstAvailable) lang.value = firstAvailable
-    code.value = templates[lang.value] ?? ''
+    code.value = templateFor(lang.value)
   } catch (e) {
     toast(e instanceof Error ? e.message : '加载题目失败', 'err')
   } finally {
@@ -86,13 +117,13 @@ async function load() {
 }
 
 watch(lang, (next, prev) => {
-  const prevTpl = templates[prev]
-  const nextTpl = templates[next] ?? ''
+  const prevTpl = templateFor(prev)
+  const nextTpl = templateFor(next)
   if (!code.value.trim() || code.value === prevTpl) code.value = nextTpl
 })
 
 function resetCode() {
-  code.value = templates[lang.value] ?? ''
+  code.value = templateFor(lang.value)
   toast('已恢复代码模板', 'info')
 }
 
@@ -229,6 +260,7 @@ onBeforeUnmount(() => {
             <span class="mono">时间 {{ summary.timeLimitMs }}ms</span>
             <span class="mono">内存 {{ summary.memoryLimitMb }}MB</span>
             <span class="mono">{{ summary.submissions }} 次提交</span>
+            <span v-if="isFunction" class="tag fn-tag">函数式判题</span>
             <span class="tag" v-for="t in (summary.tags ?? '').split(',').filter(Boolean)" :key="t">{{ t }}</span>
           </div>
         </div>
@@ -398,6 +430,12 @@ onBeforeUnmount(() => {
   margin: 0;
   letter-spacing: -0.01em;
 }
+.fn-tag {
+  color: var(--accent);
+  border-color: rgba(56, 189, 248, 0.4);
+  background: rgba(56, 189, 248, 0.08);
+}
+
 .meta {
   display: flex;
   align-items: center;

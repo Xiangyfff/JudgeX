@@ -72,6 +72,15 @@
 - **资源与环境保护** — Java、Node 有堆上限；环境变量清空只留 `PATH`，`HOME` 与临时目录指向任务私有目录，跑完即删。
 - **两档：进程模式只做控制，容器模式才是隔离边界** — `local` 是进程级，挡超时、输出洪水、误写文件，**不挡**读文件与联网；`docker` 才是隔离档，已加固到「非 root + seccomp + capability 裁剪 + 只读根 + 资源限额」：容器内以 `65534:65534` 运行，19 条 seccomp 拒绝规则（`mount`/`unshare`/`ptrace`/`keyctl` 等实测 `EPERM`，`clone3` 返 `ENOSYS`），`--cap-drop ALL`、`no-new-privileges:true`、`--read-only`、`--ipc none`、`--network none`、`--pids-limit 64`、`--memory 256m`、`--cpus 1.0` 与 `ulimit nofile/core/fsize` 全部生效。容器镜像由 `docker/runner/Dockerfile` 组装（JDK + Python + Node），`--judgex.sandbox.mode=docker` 即可切换。数据见 [`docs/SANDBOX-TESTS.md`](docs/SANDBOX-TESTS.md)。
 
+### 🧩 两种判题方式
+
+> 老题不动，新题可以像力扣那样只写一个方法。
+
+- **一个字段区分** — 题目表上的 `judge_mode` 决定判题方式：`STDIN` 走传统"读标准输入、写标准输出"，`FUNCTION` 只提交一个 `Solution` 类。
+- **外层包装** — 函数题在判题前被拼进一段固定外壳：读一行参数、调用签名里的方法、把返回值按统一格式打印，用户看到的样例输入就是 `[2,7,11,15], 9`。
+- **类型白名单** — 支持 `int` / `long` / `String` / `boolean` 与它们的数组、`int[][]`，语言限 Java 与 Python；签名超出范围直接判 `SYSTEM_ERROR` 并写明原因，不给误导性的编译错误。
+- **出题只多填两个框** — 管理端选模式、填签名（如 `int[] twoSum(int[] nums, int target)`），测试点照旧一条条加。
+
 ### 📡 看得见的判题过程
 
 > 一次提交 1.2 秒，用户不该对着转圈猜。
@@ -308,6 +317,7 @@ JudgeX
 - 表结构由 Flyway 管：脚本一旦执行就不能改，改表要新增 `Vn__` 脚本。迁移到 MySQL 后接口多了一跳网络往返，上面的压测数字没有重跑。
 - 判题的时限与内存现在来自题目配置：时限只计程序自身的运行时间（容器/进程启动单独给宽限，外层超时只作保险丝），编译时间不计入单用例时限。
 - 提交详情与判题进度流只对作者本人和管理员开放（其他人 403）；登录接口目前没有失败次数限制，公网部署前应加。
+- 函数式判题目前只覆盖 Java 与 Python，且参数/返回值限定在八个基础类型上；链表、树这类自定义结构还没做。
 
 ## License
 

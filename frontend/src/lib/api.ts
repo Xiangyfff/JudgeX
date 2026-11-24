@@ -18,6 +18,8 @@ export interface ProblemSummary {
   timeLimitMs: number
   memoryLimitMb: number
   published: boolean
+  judgeMode: string
+  signature: string | null
   submissions: number
   accepted: number
   acceptRate: number

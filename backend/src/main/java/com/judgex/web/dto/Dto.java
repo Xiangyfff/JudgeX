@@ -13,6 +13,7 @@ public final class Dto {
     public record ProblemSummary(
             long id, String slug, String title, String difficulty, String tags,
             int timeLimitMs, int memoryLimitMb, boolean published,
+            String judgeMode, String signature,
             long submissions, long accepted, double acceptRate
     ) {
     }
@@ -82,7 +83,8 @@ public final class Dto {
 
     public record ProblemUpsertRequest(
             String slug, String title, String difficulty, String tags, String statement,
-            Integer timeLimitMs, Integer memoryLimitMb, Boolean published
+            Integer timeLimitMs, Integer memoryLimitMb, Boolean published,
+            String judgeMode, String signature
     ) {
     }
 

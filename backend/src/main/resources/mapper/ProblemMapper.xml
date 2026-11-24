@@ -10,6 +10,7 @@
     <sql id="summarySelect">
         SELECT p.id, p.slug, p.title, p.difficulty, p.tags,
                p.time_limit_ms, p.memory_limit_mb, p.published,
+               p.judge_mode, p.signature,
                COALESCE(SUM(CASE WHEN s.id IS NULL THEN 0 ELSE 1 END), 0) AS submissions,
                COALESCE(SUM(CASE WHEN s.verdict = 'AC' THEN 1 ELSE 0 END), 0) AS accepted,
                CASE WHEN COUNT(s.id) = 0 THEN 0.0
@@ -21,7 +22,8 @@
 
     <sql id="summaryGroupBy">
         GROUP BY p.id, p.slug, p.title, p.difficulty, p.tags,
-                 p.time_limit_ms, p.memory_limit_mb, p.published
+                 p.time_limit_ms, p.memory_limit_mb, p.published,
+                 p.judge_mode, p.signature
     </sql>
 
     <select id="summaries" resultType="com.judgex.web.dto.Dto$ProblemSummary">
@@ -68,7 +70,9 @@
                tc.expected_output,
                tc.points,
                p.time_limit_ms,
-               p.memory_limit_mb
+               p.memory_limit_mb,
+               p.judge_mode,
+               p.signature
         FROM test_cases tc
         JOIN problems p ON p.id = tc.problem_id
         WHERE tc.problem_id = #{problemId}
@@ -77,9 +81,9 @@
 
     <insert id="insertRow" useGeneratedKeys="true" keyProperty="id">
         INSERT INTO problems (slug, title, difficulty, tags, statement,
-                              time_limit_ms, memory_limit_mb, published)
+                              time_limit_ms, memory_limit_mb, published, judge_mode, signature)
         VALUES (#{slug}, #{title}, #{difficulty}, #{tags}, #{statement},
-                #{timeLimitMs}, #{memoryLimitMb}, #{published})
+                #{timeLimitMs}, #{memoryLimitMb}, #{published}, #{judgeMode}, #{signature})
     </insert>
 
     <update id="updateRow">
@@ -91,7 +95,9 @@
                statement = #{statement},
                time_limit_ms = #{timeLimitMs},
                memory_limit_mb = #{memoryLimitMb},
-               published = #{published}
+               published = #{published},
+               judge_mode = #{judgeMode},
+               signature = #{signature}
          WHERE id = #{id}
     </update>
 

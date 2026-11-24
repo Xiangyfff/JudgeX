@@ -89,6 +89,8 @@ Worker 循环（事件驱动，2s 兜底）:
    → 清理临时目录
 ```
 
+**函数题多一层包装**：`judge_mode = 'FUNCTION'` 的题目在写文件前先被 `FunctionHarness` 包成完整程序——把 `problems.signature` 解析成返回类型、方法名、参数表，再套进 `resources/harness/Main.java`（Java）或 `main.py`（Python）的外壳：读一行参数、按类型转换、调用方法、把返回值按统一格式打印。类型限定在 `int` / `long` / `String` / `boolean` 与它们的数组，签名不支持时判 `SYSTEM_ERROR` 而不是把外壳的编译错误甩给用户。判题内核（进程、沙箱、时限、比对）完全不变。
+
 **编译与运行分开计时**：编译时间不计入单用例时限，否则 Java 这种要起 JVM 的语言会被系统性歧视。
 
 **时限只算程序自己的运行时间**：每个用例执行前从 `problems.time_limit_ms` / `memory_limit_mb` 取数。容器模式用只读挂载的 `clock.sh` 在程序起止各写一次 `date +%s%N`，宿主从 `/work`（bind mount）读这两个时间戳算出 `runMs`；`local` 模式进程直连，`runMs` 就是墙钟。TLE 判定为 `runMs > time_limit_ms + 100 ms`（抖动容差），写进 `test_results.time_ms` / `submissions.total_time_ms` 的也是 `runMs`。外层 `waitFor(time_limit_ms + 启动宽限)` 只是**保险丝**（docker 默认 3000 ms、local 500 ms，见 `judgex.sandbox.startup-allowance-ms` / `local-startup-allowance-ms`）：被它掐断（拿不到结束时间戳）仍判 TLE，展示为时限本身；容器启动那 0.6～1.2 s 不再进入判定与计时。编译同理：30 s + 3000 ms 宽限，展示用编译进程自身耗时。`MLE` 由运行时自己报的 OOM（`OutOfMemoryError`、`JavaScript heap out of memory` 等）识别——`local` 模式拿不到准确的内存峰值，就只报确定的事。

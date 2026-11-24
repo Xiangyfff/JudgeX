@@ -78,7 +78,7 @@ public class SeedData implements ApplicationRunner {
 
                 输入：`1 2`
                 输出：`3`
-                """, 2000, 256, true),
+                """, 2000, 256, true, null, null),
                 List.of(
                         c(1, "1 2", "3"),
                         c(2, "0 0", "0"),
@@ -110,7 +110,7 @@ public class SeedData implements ApplicationRunner {
                 ## 提示
 
                 可以用双指针原地交换，也可以新建一个字符串。
-                """, 2000, 256, true),
+                """, 2000, 256, true, null, null),
                 List.of(
                         c(1, "judgex", "xegduj"),
                         c(2, "a", "a"),
@@ -152,7 +152,7 @@ public class SeedData implements ApplicationRunner {
                 ## 提示
 
                 Kadane 算法可以做到 O(n)。注意答案可能是负数。
-                """, 2000, 256, true),
+                """, 2000, 256, true, null, null),
                 List.of(
                         c(1, "8\n-2 1 -3 4 -1 2 1 -5", "6"),
                         c(2, "1\n-7", "-7"),
@@ -184,7 +184,7 @@ public class SeedData implements ApplicationRunner {
                 ## 提示
 
                 `n` 最大到 90，结果超过 32 位整数范围，请使用 64 位整数。
-                """, 2000, 256, true),
+                """, 2000, 256, true, null, null),
                 List.of(
                         c(1, "10", "55"),
                         c(2, "1", "1"),
@@ -219,7 +219,7 @@ public class SeedData implements ApplicationRunner {
                 ## 提示
 
                 经典栈应用：左括号入栈，右括号与栈顶比较。
-                """, 2000, 256, true),
+                """, 2000, 256, true, null, null),
                 List.of(
                         c(1, "{[()]}", "YES"),
                         c(2, "(]", "NO"),
@@ -259,7 +259,7 @@ public class SeedData implements ApplicationRunner {
                 ## 提示
 
                 小顶堆维护 k 个元素是 O(n log k)；快速选择期望 O(n)。
-                """, 3000, 256, true),
+                """, 3000, 256, true, null, null),
                 List.of(
                         c(1, "6 2\n3 2 1 5 6 4", "5"),
                         c(2, "1 1\n42", "42"),
